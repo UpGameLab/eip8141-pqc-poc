@@ -1,0 +1,16 @@
+{
+  "name": "eip8141-contracts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "send-frame-tx": "tsx script/send_frame_tx.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "viem": "^2.0.0",
+    "@noble/curves": "^1.4.0"
+  }
+}

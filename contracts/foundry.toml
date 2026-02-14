@@ -1,0 +1,7 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "../build/bin/solc"
+evm_version = "osaka"
+optimizer = false
