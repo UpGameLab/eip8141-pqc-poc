@@ -362,21 +362,9 @@ abstract contract ValidationManager8141 is EIP712, SelectorManager8141, HookMana
                     );
                 }
             } else if (vType == VALIDATION_TYPE_PERMISSION) {
-                PermissionId pId = ValidatorLib8141.getPermissionId(vId);
-                if (
-                    PassFlag.unwrap(state.permissionConfig[pId].permissionFlag)
-                        & PassFlag.unwrap(SKIP_FRAMETX) != 0
-                ) {
-                    revert PermissionNotAllowedForFrameTx();
-                }
-                (ValidationData policyCheck, ISigner8141 signer) =
-                    _checkFrameTxPolicy(pId, account, sigHash, senderFrameIndex, sig);
-                validationData = _intersectValidationData(validationData, policyCheck);
                 validationData = _intersectValidationData(
                     validationData,
-                    ValidationData.wrap(
-                        signer.checkFrameTxSignature(bytes32(PermissionId.unwrap(pId)), account, sigHash, sig)
-                    )
+                    _validatePermissionFrameTx(vId, account, sigHash, senderFrameIndex, sig)
                 );
             } else {
                 revert InvalidValidationType();
@@ -385,6 +373,29 @@ abstract contract ValidationManager8141 is EIP712, SelectorManager8141, HookMana
             // NOTE: VERIFY frames are read-only (no sstore/tstore allowed).
             // The SENDER frame derives the hook from storage directly.
         }
+    }
+
+    /// @notice Validate a permission-based frame tx signature.
+    function _validatePermissionFrameTx(
+        ValidationId vId,
+        address account,
+        bytes32 sigHash,
+        uint256 senderFrameIndex,
+        bytes calldata sig
+    ) internal returns (ValidationData validationData) {
+        ValidationStorage storage state = _validationStorage();
+        PermissionId pId = ValidatorLib8141.getPermissionId(vId);
+        if (
+            PassFlag.unwrap(state.permissionConfig[pId].permissionFlag)
+                & PassFlag.unwrap(SKIP_FRAMETX) != 0
+        ) {
+            revert PermissionNotAllowedForFrameTx();
+        }
+        (ValidationData policyCheck, ISigner8141 signer) =
+            _checkFrameTxPolicy(pId, account, sigHash, senderFrameIndex, sig);
+        validationData = _intersectValidationData(policyCheck, ValidationData.wrap(
+            signer.checkFrameTxSignature(bytes32(PermissionId.unwrap(pId)), account, sigHash, sig)
+        ));
     }
 
     /// @notice Check frame tx policies for a permission.
@@ -400,33 +411,11 @@ abstract contract ValidationManager8141 is EIP712, SelectorManager8141, HookMana
     ) internal returns (ValidationData validationData, ISigner8141 signer) {
         ValidationStorage storage state = _validationStorage();
         PolicyData[] storage policyData = state.permissionConfig[pId].policyData;
+        bytes32 permId = bytes32(PermissionId.unwrap(pId));
         unchecked {
             for (uint256 i = 0; i < policyData.length; i++) {
-                (PassFlag flag, IPolicy8141 policy) = ValidatorLib8141.decodePolicyData(policyData[i]);
-                uint8 idx = uint8(bytes1(sig[0]));
-                bytes calldata policySig;
-                if (idx == i) {
-                    uint256 length = uint64(bytes8(sig[1:9]));
-                    policySig = sig[9:9 + length];
-                    sig = sig[9 + length:];
-                } else if (idx < i) {
-                    revert PolicySignatureOrderError();
-                } else {
-                    policySig = sig[0:0];
-                }
-                if (PassFlag.unwrap(flag) & PassFlag.unwrap(SKIP_FRAMETX) == 0) {
-                    // EIP-8141 native: policy can use frameDataLoad(senderFrameIndex, offset)
-                    ValidationData vd = ValidationData.wrap(
-                        policy.checkFrameTxPolicy(
-                            bytes32(PermissionId.unwrap(pId)), account, sigHash, senderFrameIndex
-                        )
-                    );
-                    address result = getValidationResult(vd);
-                    if (result != address(0)) {
-                        revert PolicyFailed(i);
-                    }
-                    validationData = _intersectValidationData(validationData, vd);
-                }
+                (sig, validationData) =
+                    _checkSinglePolicy(policyData, permId, account, sigHash, senderFrameIndex, sig, i, validationData);
             }
             if (uint8(bytes1(sig[0])) != 255) {
                 revert SignerPrefixNotPresent();
@@ -434,6 +423,37 @@ abstract contract ValidationManager8141 is EIP712, SelectorManager8141, HookMana
             sig = sig[1:];
             return (validationData, state.permissionConfig[pId].signer);
         }
+    }
+
+    function _checkSinglePolicy(
+        PolicyData[] storage policyData,
+        bytes32 permId,
+        address account,
+        bytes32 sigHash,
+        uint256 senderFrameIndex,
+        bytes calldata sig,
+        uint256 i,
+        ValidationData validationData
+    ) internal returns (bytes calldata, ValidationData) {
+        (PassFlag flag, IPolicy8141 policy) = ValidatorLib8141.decodePolicyData(policyData[i]);
+        {
+            uint8 idx = uint8(bytes1(sig[0]));
+            if (idx == i) {
+                sig = sig[9 + uint64(bytes8(sig[1:9])):];
+            } else if (idx < i) {
+                revert PolicySignatureOrderError();
+            }
+        }
+        if (PassFlag.unwrap(flag) & PassFlag.unwrap(SKIP_FRAMETX) == 0) {
+            ValidationData vd = ValidationData.wrap(
+                policy.checkFrameTxPolicy(permId, account, sigHash, senderFrameIndex)
+            );
+            if (getValidationResult(vd) != address(0)) {
+                revert PolicyFailed(i);
+            }
+            validationData = _intersectValidationData(validationData, vd);
+        }
+        return (sig, validationData);
     }
 
     // ── Enable Mode ─────────────────────────────────────────────────────
