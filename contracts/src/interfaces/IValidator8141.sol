@@ -7,9 +7,11 @@ pragma solidity ^0.8.28;
 ///      They maintain their own storage, keyed by account address.
 interface IValidator8141 {
     /// @notice Validate a frame transaction signature.
-    /// @dev Called by the Kernel during a VERIFY frame (static context).
+    /// @dev Called by the Kernel during a VERIFY frame.
     ///      The validator should recover the signer and check authorization.
     ///      The Kernel handles APPROVE — the validator only answers "is this valid?"
+    ///      Note: Validators may modify their own storage (including transient storage)
+    ///      to pass context to hooks, unlike ERC-4337's pure validation phase.
     /// @param account The account address being validated (tx.sender)
     /// @param sigHash The canonical signature hash from TXPARAMLOAD(0x08)
     /// @param signature The raw signature bytes (format depends on validator)
@@ -18,7 +20,7 @@ interface IValidator8141 {
         address account,
         bytes32 sigHash,
         bytes calldata signature
-    ) external view returns (bool valid);
+    ) external returns (bool valid);
 
     /// @notice Install this validator for the calling account.
     /// @dev Called by the Kernel in a SENDER frame. msg.sender is the Kernel.
