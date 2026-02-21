@@ -1,0 +1,14 @@
+{
+  "../8141-geth": {
+    "rev": "663114afa146edbd2c77696b9bef6fd4b0ccb264"
+  },
+  "../solidity-eip8141": {
+    "rev": "872af0edbca628e3b1c9c9f8b15900c153669644"
+  },
+  "lib/solady": {
+    "tag": {
+      "name": "v0.1.26",
+      "rev": "acd959aa4bd04720d640bf4e6a5c71037510cc4b"
+    }
+  }
+}
