@@ -24,6 +24,7 @@ const suites = [
   { file: "e2e/kernel-hooked/spending-limit.ts", name: "SpendingLimitHook" },
   { file: "e2e/coinbase/coinbase-ecdsa.ts", name: "Coinbase ECDSA" },
   { file: "e2e/coinbase/coinbase-webauthn.ts", name: "Coinbase WebAuthn" },
+  { file: "e2e/benchmark/gas-benchmark.ts", name: "Gas Benchmark" },
 ];
 
 let passed = 0;
