@@ -146,4 +146,31 @@ library FrameTxLib {
     function currentFrameMode() internal pure returns (uint8) {
         return frameMode(currentFrameIndex());
     }
+
+    // ─── Frame data helpers ────────────────────────────────────────────
+
+    /// @notice Get the byte size of a frame's calldata.
+    /// @dev Returns 0 for VERIFY frames (their data is always empty per EIP-8141).
+    function frameDataSize(uint256 frameIndex) internal pure returns (uint256) {
+        return txParamSize(PARAM_FRAME_DATA, frameIndex);
+    }
+
+    /// @notice Load a 32-byte word from a frame's calldata.
+    /// @param frameIndex Index of the frame to read from.
+    /// @param offset Byte offset within the frame's calldata.
+    /// @dev Returns 0 for VERIFY frames. Can be used to cross-read SENDER
+    ///      frame data from a VERIFY frame for sigHash-bound parameter extraction.
+    function frameDataLoad(uint256 frameIndex, uint256 offset) internal pure returns (bytes32) {
+        return txParamLoad(PARAM_FRAME_DATA, frameIndex, offset);
+    }
+
+    /// @notice Copy a frame's full calldata into memory.
+    /// @dev Returns empty bytes for VERIFY frames.
+    function frameData(uint256 frameIndex) internal pure returns (bytes memory result) {
+        uint256 size = txParamSize(PARAM_FRAME_DATA, frameIndex);
+        result = new bytes(size);
+        assembly {
+            txparamcopy(0x12, frameIndex, add(result, 0x20), 0, size)
+        }
+    }
 }
