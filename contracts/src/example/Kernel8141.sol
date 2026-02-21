@@ -2,743 +2,663 @@
 pragma solidity ^0.8.28;
 
 import {FrameTxLib} from "../FrameTxLib.sol";
+import {ValidationManager8141} from "../core/ValidationManager8141.sol";
+import {
+    ValidationId,
+    ValidationMode,
+    ValidationType,
+    PermissionId,
+    ValidationData,
+    PassFlag,
+    CallType,
+    ExecMode,
+    ExecType,
+    ExecModeSelector,
+    ExecModePayload
+} from "../types/Types8141.sol";
 import {IValidator8141} from "../interfaces/IValidator8141.sol";
-import {IExecutor} from "../interfaces/IExecutor.sol";
-import {IPreExecutionHook, IPostExecutionHook} from "../interfaces/IHook.sol";
-import {IFallbackHandler} from "../interfaces/IFallbackHandler.sol";
+import {IHook8141} from "../interfaces/IHook8141.sol";
+import {IModule8141} from "../interfaces/IModule8141.sol";
+import {IERC7579Account8141} from "../interfaces/IERC7579Account8141.sol";
+import {ValidatorLib8141} from "../utils/ValidatorLib8141.sol";
+import {ExecLib8141} from "../utils/ExecLib8141.sol";
+import {ModuleLib8141} from "../utils/ModuleLib8141.sol";
+import {
+    InstallValidatorDataFormat,
+    InstallExecutorDataFormat,
+    InstallFallbackDataFormat
+} from "../types/Structs8141.sol";
+import {
+    VALIDATION_MODE_DEFAULT,
+    VALIDATION_MODE_ENABLE,
+    VALIDATION_TYPE_ROOT,
+    VALIDATION_TYPE_VALIDATOR,
+    VALIDATION_TYPE_PERMISSION,
+    MODULE_TYPE_VALIDATOR,
+    MODULE_TYPE_EXECUTOR,
+    MODULE_TYPE_FALLBACK,
+    MODULE_TYPE_HOOK,
+    MODULE_TYPE_POLICY,
+    MODULE_TYPE_SIGNER,
+    HOOK_NOT_INSTALLED,
+    HOOK_INSTALLED,
+    HOOK_ONLY_ENTRYPOINT,
+    ERC1967_IMPLEMENTATION_SLOT,
+    CALLTYPE_SINGLE,
+    CALLTYPE_BATCH,
+    CALLTYPE_DELEGATECALL,
+    CALLTYPE_STATIC,
+    EXECTYPE_DEFAULT,
+    EXECTYPE_TRY,
+    EXEC_MODE_DEFAULT,
+    ERC1271_MAGICVALUE,
+    ERC1271_INVALID
+} from "../types/Constants8141.sol";
 
 /// @title Kernel8141
-/// @notice Modular EIP-8141 smart account inspired by ZeroDev Kernel v3.
+/// @notice Modular EIP-8141 smart account with Kernel v3 feature parity.
+/// @dev Inherits ValidationManager8141 (→ SelectorManager8141 + HookManager8141 + ExecutorManager8141).
 ///
-/// @dev Frame transaction patterns:
+///   Architecture:
+///     Kernel8141
+///       └── ValidationManager8141 (validator/permission/nonce/enable/EIP-712/ERC-1271)
+///             ├── SelectorManager8141   (fallback selector routing)
+///             ├── HookManager8141       (unified hook lifecycle)
+///             └── ExecutorManager8141   (executor registry)
 ///
-///   Simple Transaction:
-///     Frame 0: VERIFY(kernel)  → kernel.validate(sig, scope=2)          → APPROVE(both)
-///     Frame 1: SENDER(kernel)  → kernel.execute(target, value, data)
+///   Frame transaction patterns:
 ///
-///   Sponsored Transaction:
-///     Frame 0: VERIFY(kernel)  → kernel.validate(sig, scope=0)          → APPROVE(exec)
-///     Frame 1: VERIFY(sponsor) → sponsor.validate()                     → APPROVE(pay)
-///     Frame 2: SENDER(kernel)  → kernel.execute(erc20, 0, transfer...)
-///     Frame 3: SENDER(kernel)  → kernel.execute(target, value, data)
+///     Simple Transaction (root validator):
+///       Frame 0: VERIFY(kernel)  → kernel.validate(sig, scope=2)          → APPROVE(both)
+///       Frame 1: SENDER(kernel)  → kernel.execute(mode, data)
 ///
-///   Non-Root Validator (sigHash-bound):
-///     Frame 0: VERIFY(kernel)  → kernel.validateFromSenderFrame(sig, scope)
-///     Frame 1: SENDER(kernel)  → kernel.validatedCall(validator, execute.encode(...))
-contract Kernel8141 {
-    address internal constant ENTRY_POINT = 0x00000000000000000000000000000000000000AA;
-
-    // Frame modes
-    uint8 internal constant FRAME_MODE_DEFAULT = 0;
-    uint8 internal constant FRAME_MODE_VERIFY  = 1;
-    uint8 internal constant FRAME_MODE_SENDER  = 2;
-
-    // ── Core State ────────────────────────────────────────────────────────
-    IValidator8141 public rootValidator;
-    mapping(IValidator8141 => bool) public isValidatorInstalled;
-    bool public initialized;
-
-    // ── Per-Selector Execution Config (Kernel v3 pattern) ────────────────
-    struct ExecutionConfig {
-        uint48 validAfter;
-        uint48 validUntil;
-        IExecutor executor;
-        uint8 allowedFrameModes;  // VERIFY(1) | SENDER(2) | BOTH(3)
-    }
-    mapping(bytes4 => ExecutionConfig) public executionConfig;
-
-    // ── Per-Selector Hooks ────────────────────────────────────────────────
-    mapping(bytes4 => IPreExecutionHook[]) internal _preHooks;
-    mapping(bytes4 => IPostExecutionHook[]) internal _postHooks;
-
-    // ── Hook Selector Tracking (bidirectional) ────────────────────────────
-    mapping(address => bytes4[]) internal _preHookSelectors;
-    mapping(address => bytes4[]) internal _postHookSelectors;
-
-    // ── Executor Selector Tracking (bidirectional) ────────────────────────
-    mapping(address => bytes4[]) internal _executorSelectors;
-
-    // ── Fallback Handler Registry ─────────────────────────────────────────
-    mapping(bytes4 => address) internal _fallbackHandlers;
-    mapping(address => bytes4[]) internal _handlerSelectors;
-
-    // ── Module Lists (for introspection) ──────────────────────────────────
-    mapping(ModuleType => address[]) internal _modulesByType;
-    mapping(address => uint256) internal _moduleIndex;  // index + 1 (0 = not present)
-
-    // ── Module Registry ───────────────────────────────────────────────────
-    enum ModuleType { VALIDATOR, EXECUTOR, PRE_HOOK, POST_HOOK, FALLBACK_HANDLER }
-    mapping(address => ModuleType) public moduleTypes;
-    mapping(address => bool) public isModuleInstalled;
-
-    error NotInitialized();
-    error AlreadyInitialized();
+///     Non-Root Validator (sigHash-bound):
+///       Frame 0: VERIFY(kernel)  → kernel.validateFromSenderFrame(sig, scope)
+///       Frame 1: SENDER(kernel)  → kernel.validatedCall(validator, data)
+///
+///     Enable Mode (install + validate in one tx):
+///       Frame 0: VERIFY(kernel)  → kernel.validateWithEnable(enableData, sig, scope)
+///       Frame 1: SENDER(kernel)  → kernel.execute(mode, data)
+///
+///     Permission-Based:
+///       Frame 0: VERIFY(kernel)  → kernel.validatePermission(sig, scope)
+///       Frame 1: SENDER(kernel)  → kernel.execute(mode, data)
+contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
+    error ExecutionReverted();
+    error InvalidExecutor();
+    error InvalidFallback();
+    error InvalidCallType();
+    error InvalidModuleType();
     error InvalidCaller();
-    error InvalidSignature();
-    error ExecutionFailed();
-    error ValidatorNotInstalled();
-    error ValidatorAlreadyInstalled();
-    error CannotRemoveRootValidator();
-    error BatchLengthMismatch();
-    error ModuleAlreadyInstalled();
-    error ModuleNotInstalled();
-    error InvalidFrameMode();
-    error TimeRestriction();
-    error NoHandlerForSelector(bytes4 selector);
-    error HandlerAlreadyRegistered(bytes4 selector);
-    error DelegatecallNotConfigured();
-    error StorageCorruption(string reason);
-    error NoValidatedCallFrame();
+    error InvalidSelector();
+    error InitConfigError(uint256 idx);
+    error AlreadyInitialized();
 
-    event Initialized(IValidator8141 rootValidator);
-    event ValidatorInstalled(IValidator8141 validator);
-    event ValidatorUninstalled(IValidator8141 validator);
-    event RootValidatorChanged(IValidator8141 oldValidator, IValidator8141 newValidator);
-    event ModuleInstalled(ModuleType moduleType, address module);
-    event ModuleUninstalled(ModuleType moduleType, address module);
+    event Received(address sender, uint256 amount);
+    event Upgraded(address indexed implementation);
 
-    // ── Initialization ────────────────────────────────────────────────
+    // Frame mode constants
+    uint8 internal constant FRAME_MODE_DEFAULT = 0;
+    uint8 internal constant FRAME_MODE_VERIFY = 1;
+    uint8 internal constant FRAME_MODE_SENDER = 2;
 
-    constructor(IValidator8141 _rootValidator, bytes memory _validatorData) {
-        initialized = true;
-        rootValidator = _rootValidator;
-        isValidatorInstalled[_rootValidator] = true;
-        _rootValidator.onInstall(_validatorData);
-        emit Initialized(_rootValidator);
+    constructor() {
+        // Sentinel: mark implementation as initialized to prevent direct use
+        _validationStorage().rootValidator = ValidationId.wrap(bytes21(abi.encodePacked(hex"deadbeef")));
     }
 
-    /// @notice Initialize the account (for factory/proxy deployments).
-    function initialize(IValidator8141 _rootValidator, bytes calldata _validatorData) external {
-        if (initialized) revert AlreadyInitialized();
-        initialized = true;
-        rootValidator = _rootValidator;
-        isValidatorInstalled[_rootValidator] = true;
-        _rootValidator.onInstall(_validatorData);
-        emit Initialized(_rootValidator);
-    }
+    // ── Access control ──────────────────────────────────────────────────
 
-    // ── Validation (VERIFY frame) ─────────────────────────────────────
-
-    /// @notice Validate using the root validator. Called in a VERIFY frame.
-    /// @param signature Raw signature bytes (format depends on validator)
-    /// @param scope Approval scope: 0=execution, 1=payment, 2=both
-    function validate(bytes calldata signature, uint8 scope) external {
-        if (msg.sender != ENTRY_POINT) revert InvalidCaller();
-        if (!initialized) revert NotInitialized();
-
-        bytes32 sigHash = FrameTxLib.sigHash();
-        address account = FrameTxLib.txSender();
-
-        bool valid = rootValidator.validateSignature(account, sigHash, signature);
-        if (!valid) revert InvalidSignature();
-
-        FrameTxLib.approveEmpty(scope);
-    }
-
-    /// @notice Validate with a non-root validator, reading it from SENDER frame data.
-    /// @dev The validator address is extracted from the first argument of `validatedCall()`
-    ///      in the SENDER frame. Since SENDER frame data is included in sigHash, the
-    ///      validator selection is cryptographically bound to the signature — unlike passing
-    ///      the validator in VERIFY frame calldata (which is elided from sigHash).
-    /// @param signature Raw signature bytes (format depends on validator)
-    /// @param scope Approval scope: 0=execution, 1=payment, 2=both
-    function validateFromSenderFrame(bytes calldata signature, uint8 scope) external {
-        if (msg.sender != ENTRY_POINT) revert InvalidCaller();
-        if (!initialized) revert NotInitialized();
-
-        uint256 senderFrame = _findValidatedCallFrame();
-        // ABI offset 4 (skip selector) → validator address (first arg, left-padded to 32 bytes)
-        IValidator8141 validator = IValidator8141(
-            address(uint160(uint256(FrameTxLib.frameDataLoad(senderFrame, 4))))
-        );
-
-        if (!isValidatorInstalled[validator]) revert ValidatorNotInstalled();
-
-        bytes32 sigHash = FrameTxLib.sigHash();
-        address account = FrameTxLib.txSender();
-
-        bool valid = validator.validateSignature(account, sigHash, signature);
-        if (!valid) revert InvalidSignature();
-
-        FrameTxLib.approveEmpty(scope);
-    }
-
-    // ── Execution (SENDER frame) ──────────────────────────────────────
-
-    /// @notice Execute a single call. Called in a SENDER frame.
-    function execute(address target, uint256 value, bytes calldata data) external {
-        _executeWithConfig(msg.sig, target, value, data);
-    }
-
-    /// @notice Wrapper for non-root validator transactions. Called in a SENDER frame.
-    /// @dev The first argument (validator) is not used in execution — it exists solely
-    ///      as a sigHash-bound hint that `validateFromSenderFrame()` reads via TXPARAMLOAD
-    ///      from the SENDER frame calldata. The `innerCalldata` is forwarded via self-call
-    ///      to execute the actual operation (execute, executeBatch, etc.).
-    /// @param innerCalldata ABI-encoded call to an execute function on this contract
-    function validatedCall(
-        IValidator8141 /* validator */,
-        bytes calldata innerCalldata
-    ) external returns (bytes memory) {
-        if (msg.sender != address(this)) revert InvalidCaller();
-        (bool ok, bytes memory ret) = address(this).call(innerCalldata);
-        if (!ok) {
-            assembly { revert(add(ret, 0x20), mload(ret)) }
-        }
-        return ret;
-    }
-
-    /// @notice Execute a batch of calls. Called in a SENDER frame.
-    function executeBatch(
-        address[] calldata targets,
-        uint256[] calldata values,
-        bytes[] calldata datas
-    ) external {
-        bytes memory encoded = abi.encode(targets, values, datas);
-        _executeWithConfigMemory(msg.sig, address(0), 0, encoded);
-    }
-
-    /// @notice Execute via DELEGATECALL (inherits caller storage, identity, and balance)
-    /// @dev DANGER: Can modify kernel state. Should have strict ExecutionConfig restrictions.
-    ///      Recommended: allowedFrameModes = VERIFY (1) for additional validation layer
-    function executeDelegate(address target, bytes calldata data) external returns (bytes memory) {
-        bytes memory result = _executeWithConfigMemory(msg.sig, target, 0, data);
-        return result;
-    }
-
-    /// @notice Execute via STATICCALL (read-only, reverts on state changes)
-    /// @dev Safe for queries. No value parameter (staticcall cannot send ETH)
-    function executeStatic(address target, bytes calldata data) external view returns (bytes memory) {
-        // Note: This function is view, so _executeWithConfigMemory needs special handling
-        // For now, we'll implement a direct staticcall without hooks
-        // A production implementation would need a view-compatible execution path
-
-        (bool success, bytes memory result) = target.staticcall(data);
-        if (!success) revert ExecutionFailed();
-        return result;
-    }
-
-    /// @notice Execute via CALL with graceful error handling (TRY mode)
-    /// @dev Does NOT revert on target failure. Returns (success, returnData)
-    function executeTry(address target, uint256 value, bytes calldata data)
-        external
-        returns (bool success, bytes memory returnData)
-    {
-        bytes memory result = _executeWithConfigMemory(msg.sig, target, value, data);
-        (success, returnData) = abi.decode(result, (bool, bytes));
-    }
-
-    /// @notice Batch execution with TRY mode for each call
-    /// @dev Continues on failure. Returns array of (success, returnData) tuples
-    function executeBatchTry(
-        address[] calldata targets,
-        uint256[] calldata values,
-        bytes[] calldata datas
-    ) external returns (bool[] memory successes, bytes[] memory returnDatas) {
-        bytes memory encoded = abi.encode(targets, values, datas);
-        bytes memory result = _executeWithConfigMemory(msg.sig, address(0), 0, encoded);
-        (successes, returnDatas) = abi.decode(result, (bool[], bytes[]));
-    }
-
-    /// @notice Internal execution with config-based hooks and validation (calldata version)
-    function _executeWithConfig(
-        bytes4 selector,
-        address target,
-        uint256 value,
-        bytes calldata data
-    ) internal {
-        _executeWithConfigMemory(selector, target, value, data);
-    }
-
-    /// @notice Internal execution with config-based hooks and validation (memory version)
-    function _executeWithConfigMemory(
-        bytes4 selector,
-        address target,
-        uint256 value,
-        bytes memory data
-    ) internal returns (bytes memory) {
-        if (msg.sender != address(this)) revert InvalidCaller();
-
-        ExecutionConfig storage config = executionConfig[selector];
-
-        // 1. Frame mode enforcement (EIP-8141 unique)
-        // Only enforce if config exists (allowedFrameModes != 0)
-        if (config.allowedFrameModes != 0) {
-            uint8 currentMode = FrameTxLib.currentFrameMode();
-            if (config.allowedFrameModes & currentMode == 0) revert InvalidFrameMode();
-        }
-
-        // 2. Time-based validation (Kernel v3)
-        if (config.validAfter != 0 || config.validUntil != 0) {
-            if (block.timestamp < config.validAfter || block.timestamp > config.validUntil) {
-                revert TimeRestriction();
-            }
-        }
-
-        // 3. Pre-hooks
-        IPreExecutionHook[] storage preHooks = _preHooks[selector];
-        for (uint256 i = 0; i < preHooks.length; i++) {
-            preHooks[i].preExecute(target, value, data);
-        }
-
-        // 4. Execute via executor or direct call
-        bytes memory result;
-        if (address(config.executor) != address(0)) {
-            result = config.executor.executeWithData(target, value, data);
-        } else {
-            // Direct execution - dispatch based on selector
-            if (selector == this.executeDelegate.selector) {
-                // DELEGATECALL execution with storage protection
-                if (config.allowedFrameModes == 0) revert DelegatecallNotConfigured();
-
-                address rootValidatorBefore = address(rootValidator);
-
-                (bool success, bytes memory ret) = target.delegatecall(data);
-                if (!success) revert ExecutionFailed();
-
-                // Verify no storage corruption
-                if (address(rootValidator) != rootValidatorBefore) {
-                    revert StorageCorruption("rootValidator modified");
-                }
-
-                result = ret;
-
-            } else if (selector == this.executeTry.selector) {
-                // TRY execution - don't revert on failure
-                (bool success, bytes memory ret) = target.call{value: value}(data);
-                result = abi.encode(success, ret);
-
-            } else if (selector == this.executeBatchTry.selector) {
-                // Batch TRY execution
-                (address[] memory targets, uint256[] memory values, bytes[] memory datas) =
-                    abi.decode(data, (address[], uint256[], bytes[]));
-                if (targets.length != values.length || values.length != datas.length) {
-                    revert BatchLengthMismatch();
-                }
-
-                bool[] memory successes = new bool[](targets.length);
-                bytes[] memory results = new bytes[](targets.length);
-
-                for (uint256 i = 0; i < targets.length; i++) {
-                    (successes[i], results[i]) = targets[i].call{value: values[i]}(datas[i]);
-                }
-
-                result = abi.encode(successes, results);
-
-            } else if (selector == this.executeBatch.selector) {
-                // Regular batch execution (reverts on failure)
-                (address[] memory targets, uint256[] memory values, bytes[] memory datas) =
-                    abi.decode(data, (address[], uint256[], bytes[]));
-                if (targets.length != values.length || values.length != datas.length) {
-                    revert BatchLengthMismatch();
-                }
-                for (uint256 i = 0; i < targets.length; i++) {
-                    (bool success,) = targets[i].call{value: values[i]}(datas[i]);
-                    if (!success) revert ExecutionFailed();
-                }
-                result = "";
-
+    modifier onlySelfOrRoot() {
+        if (msg.sender != address(this)) {
+            IValidator8141 rv = ValidatorLib8141.getValidator(_validationStorage().rootValidator);
+            if (rv.isModuleType(MODULE_TYPE_HOOK)) {
+                bytes memory ret = IHook8141(address(rv)).preCheck(msg.sender, msg.value, msg.data);
+                _;
+                IHook8141(address(rv)).postCheck(ret);
             } else {
-                // Regular CALL execution
-                (bool success, bytes memory ret) = target.call{value: value}(data);
-                if (!success) revert ExecutionFailed();
-                result = ret;
+                revert InvalidCaller();
+            }
+        } else {
+            _;
+        }
+    }
+
+    // ── Initialization ──────────────────────────────────────────────────
+
+    function initialize(
+        ValidationId _rootValidator,
+        IHook8141 hook,
+        bytes calldata validatorData,
+        bytes calldata hookData,
+        bytes[] calldata initConfig
+    ) external {
+        ValidationStorage storage vs = _validationStorage();
+        if (ValidationId.unwrap(vs.rootValidator) != bytes21(0)) {
+            revert AlreadyInitialized();
+        }
+        if (ValidationId.unwrap(_rootValidator) == bytes21(0)) {
+            revert InvalidValidator();
+        }
+        ValidationType vType = ValidatorLib8141.getType(_rootValidator);
+        if (vType != VALIDATION_TYPE_VALIDATOR && vType != VALIDATION_TYPE_PERMISSION) {
+            revert InvalidValidationType();
+        }
+        _setRootValidator(_rootValidator);
+        ValidationConfig memory config = ValidationConfig({nonce: uint32(1), hook: hook});
+        vs.currentNonce = 1;
+        _installValidation(_rootValidator, config, validatorData, hookData);
+        for (uint256 i = 0; i < initConfig.length; i++) {
+            (bool success,) = address(this).call(initConfig[i]);
+            if (!success) {
+                revert InitConfigError(i);
+            }
+        }
+    }
+
+    function changeRootValidator(
+        ValidationId _rootValidator,
+        IHook8141 hook,
+        bytes calldata validatorData,
+        bytes calldata hookData
+    ) external payable onlySelfOrRoot {
+        ValidationStorage storage vs = _validationStorage();
+        if (ValidationId.unwrap(_rootValidator) == bytes21(0)) {
+            revert InvalidValidator();
+        }
+        ValidationType vType = ValidatorLib8141.getType(_rootValidator);
+        if (vType != VALIDATION_TYPE_VALIDATOR && vType != VALIDATION_TYPE_PERMISSION) {
+            revert InvalidValidationType();
+        }
+        _setRootValidator(_rootValidator);
+        if (_validationStorage().validationConfig[_rootValidator].hook == IHook8141(HOOK_NOT_INSTALLED)) {
+            ValidationConfig memory config = ValidationConfig({nonce: uint32(vs.currentNonce), hook: hook});
+            _installValidation(_rootValidator, config, validatorData, hookData);
+        }
+    }
+
+    function upgradeTo(address _newImplementation) external payable onlySelfOrRoot {
+        assembly {
+            sstore(ERC1967_IMPLEMENTATION_SLOT, _newImplementation)
+        }
+        emit Upgraded(_newImplementation);
+    }
+
+    // ── EIP-712 ─────────────────────────────────────────────────────────
+
+    function _domainNameAndVersion() internal pure override returns (string memory name, string memory version) {
+        name = "Kernel8141";
+        version = "0.1.0";
+    }
+
+    // ── VERIFY frame: Validation ────────────────────────────────────────
+
+    /// @notice Root validator validation. Called during VERIFY frame.
+    function validate(bytes calldata sig, uint8 scope) external {
+        _requireVerifyFrame();
+        ValidationStorage storage vs = _validationStorage();
+        ValidationId vId = vs.rootValidator;
+        address account = FrameTxLib.txSender();
+        bytes32 sigHash = FrameTxLib.sigHash();
+
+        // Find SENDER frame index for cross-frame reading
+        uint256 senderFrameIdx = _findSenderFrameIndex();
+
+        // Selector ACL: root validator has access to all selectors
+        _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, sig);
+
+        FrameTxLib.approveEmpty(scope);
+    }
+
+    /// @notice Non-root validator validation. sigHash binds to SENDER frame calldata.
+    function validateFromSenderFrame(bytes calldata sig, uint8 scope) external {
+        _requireVerifyFrame();
+        ValidationStorage storage vs = _validationStorage();
+        address account = FrameTxLib.txSender();
+        bytes32 sigHash = FrameTxLib.sigHash();
+        uint256 senderFrameIdx = _findSenderFrameIndex();
+
+        // Decode ValidationId from signature prefix
+        // sig format: [1B type][20B validator addr][actual sig]
+        ValidationId vId;
+        bytes calldata actualSig;
+        assembly {
+            vId := calldataload(sig.offset)
+            actualSig.offset := add(sig.offset, 21)
+            actualSig.length := sub(sig.length, 21)
+        }
+
+        ValidationType vType = ValidatorLib8141.getType(vId);
+        if (vType == VALIDATION_TYPE_ROOT) {
+            vId = vs.rootValidator;
+        }
+
+        // Check nonce validity
+        ValidationConfig memory vc = vs.validationConfig[vId];
+        if (address(vc.hook) == HOOK_NOT_INSTALLED && vType != VALIDATION_TYPE_ROOT) {
+            revert InvalidValidator();
+        }
+        if (vType != VALIDATION_TYPE_ROOT && vc.nonce < vs.validNonceFrom) {
+            revert InvalidNonce();
+        }
+
+        // EIP-8141 native selector ACL: read SENDER frame selector via cross-frame reading
+        if (vType != VALIDATION_TYPE_ROOT) {
+            bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
+            if (!vs.allowedSelectors[vId][senderSelector]) {
+                revert InvalidSelector();
             }
         }
 
-        // 5. Post-hooks
-        IPostExecutionHook[] storage postHooks = _postHooks[selector];
-        for (uint256 i = 0; i < postHooks.length; i++) {
-            postHooks[i].postExecute(target, value, result);
+        _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+
+        FrameTxLib.approveEmpty(scope);
+    }
+
+    /// @notice Enable mode: install a new validator and validate in one VERIFY frame.
+    /// @dev EIP-8141 advantage: enable data is in VERIFY calldata, excluded from sigHash.
+    function validateWithEnable(bytes calldata enableData, bytes calldata sig, uint8 scope) external {
+        _requireVerifyFrame();
+        address account = FrameTxLib.txSender();
+        bytes32 sigHash = FrameTxLib.sigHash();
+        uint256 senderFrameIdx = _findSenderFrameIndex();
+
+        // Decode ValidationId from first 21 bytes of sig
+        ValidationId vId;
+        bytes calldata actualSig;
+        assembly {
+            vId := calldataload(sig.offset)
+            actualSig.offset := add(sig.offset, 21)
+            actualSig.length := sub(sig.length, 21)
         }
 
-        return result;
+        // Prepend enable data to the actual signature for _enableMode processing
+        // enableData is passed separately in EIP-8141 (VERIFY calldata, excluded from sigHash)
+        _validateFrameTx(VALIDATION_MODE_ENABLE, vId, account, sigHash, senderFrameIdx, actualSig);
+
+        FrameTxLib.approveEmpty(scope);
     }
 
-    // ── Module Management (SENDER frame) ──────────────────────────────
+    /// @notice Permission-based validation (ISigner + IPolicy[]).
+    function validatePermission(bytes calldata sig, uint8 scope) external {
+        _requireVerifyFrame();
+        ValidationStorage storage vs = _validationStorage();
+        address account = FrameTxLib.txSender();
+        bytes32 sigHash = FrameTxLib.sigHash();
+        uint256 senderFrameIdx = _findSenderFrameIndex();
 
-    /// @notice Install a new validator.
-    function installValidator(IValidator8141 validator, bytes calldata data) external {
-        if (msg.sender != address(this)) revert InvalidCaller();
-        if (isValidatorInstalled[validator]) revert ValidatorAlreadyInstalled();
-        isValidatorInstalled[validator] = true;
-        validator.onInstall(data);
-        emit ValidatorInstalled(validator);
-    }
-
-    /// @notice Uninstall a validator (cannot uninstall root).
-    function uninstallValidator(IValidator8141 validator) external {
-        if (msg.sender != address(this)) revert InvalidCaller();
-        if (address(validator) == address(rootValidator)) revert CannotRemoveRootValidator();
-        if (!isValidatorInstalled[validator]) revert ValidatorNotInstalled();
-        isValidatorInstalled[validator] = false;
-        validator.onUninstall();
-        emit ValidatorUninstalled(validator);
-    }
-
-    /// @notice Change the root validator (atomic swap).
-    function changeRootValidator(IValidator8141 newValidator, bytes calldata data) external {
-        if (msg.sender != address(this)) revert InvalidCaller();
-        IValidator8141 oldValidator = rootValidator;
-        isValidatorInstalled[oldValidator] = false;
-        oldValidator.onUninstall();
-        rootValidator = newValidator;
-        isValidatorInstalled[newValidator] = true;
-        newValidator.onInstall(data);
-        emit RootValidatorChanged(oldValidator, newValidator);
-    }
-
-    // ── Unified Module System (Kernel v3 style) ──────────────────────
-
-    /// @notice Install a module (validator, executor, hook, or fallback handler)
-    function installModule(
-        ModuleType moduleType,
-        address module,
-        bytes calldata config
-    ) external {
-        if (msg.sender != address(this)) revert InvalidCaller();
-        if (isModuleInstalled[module]) revert ModuleAlreadyInstalled();
-
-        if (moduleType == ModuleType.VALIDATOR) {
-            _installValidator(IValidator8141(module), config);
-        } else if (moduleType == ModuleType.EXECUTOR) {
-            _installExecutor(IExecutor(module), config);
-        } else if (moduleType == ModuleType.PRE_HOOK) {
-            _installPreHook(IPreExecutionHook(module), config);
-        } else if (moduleType == ModuleType.POST_HOOK) {
-            _installPostHook(IPostExecutionHook(module), config);
-        } else if (moduleType == ModuleType.FALLBACK_HANDLER) {
-            _installFallbackHandler(IFallbackHandler(module), config);
+        // Decode PermissionId from signature
+        // sig format: [0x02][4B permissionId][actual sig]
+        ValidationId vId;
+        bytes calldata actualSig;
+        assembly {
+            vId := calldataload(sig.offset)
+            // mask to 5 bytes (type + permissionId)
+            vId := and(vId, 0xffffffffff000000000000000000000000000000000000000000000000000000)
+            actualSig.offset := add(sig.offset, 5)
+            actualSig.length := sub(sig.length, 5)
         }
 
-        moduleTypes[module] = moduleType;
-        isModuleInstalled[module] = true;
+        ValidationConfig memory vc = vs.validationConfig[vId];
+        if (address(vc.hook) == HOOK_NOT_INSTALLED) {
+            revert InvalidValidator();
+        }
+        if (vc.nonce < vs.validNonceFrom) {
+            revert InvalidNonce();
+        }
 
-        // Add to module list for introspection
-        _modulesByType[moduleType].push(module);
-        _moduleIndex[module] = _modulesByType[moduleType].length;  // store index + 1
+        // EIP-8141 native selector ACL
+        bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
+        if (!vs.allowedSelectors[vId][senderSelector]) {
+            revert InvalidSelector();
+        }
 
+        _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+
+        FrameTxLib.approveEmpty(scope);
+    }
+
+    // ── SENDER frame: Execution ─────────────────────────────────────────
+
+    /// @notice Execute a transaction. Called in SENDER frame.
+    /// @dev Wraps execution with hook loaded from transient storage (set during VERIFY frame).
+    function execute(ExecMode execMode, bytes calldata executionCalldata) external payable override {
+        if (msg.sender != address(this)) {
+            revert InvalidCaller();
+        }
+        // EIP-8141 native: load hook from transient storage (set by VERIFY frame)
+        IHook8141 hook = _loadExecutionHook();
+        bytes memory context;
+        bool callHook = address(hook) != HOOK_INSTALLED && address(hook) != HOOK_NOT_INSTALLED;
+        if (callHook) {
+            context = _doPreHook(hook, msg.value, msg.data);
+        }
+        ExecLib8141.execute(execMode, executionCalldata);
+        if (callHook) {
+            _doPostHook(hook, context);
+        }
+    }
+
+    /// @notice Execute from an authorized executor module.
+    function executeFromExecutor(ExecMode execMode, bytes calldata executionCalldata)
+        external
+        payable
+        override
+        returns (bytes[] memory returnData)
+    {
+        IHook8141 hook = _executorConfig(msg.sender).hook;
+        if (address(hook) == HOOK_NOT_INSTALLED) {
+            revert InvalidExecutor();
+        }
+        bytes memory context;
+        bool callHook = address(hook) != HOOK_INSTALLED;
+        if (callHook) {
+            context = _doPreHook(hook, msg.value, msg.data);
+        }
+        returnData = ExecLib8141.execute(execMode, executionCalldata);
+        if (callHook) {
+            _doPostHook(hook, context);
+        }
+    }
+
+    /// @notice Wrapper for non-root validator calls. sigHash binds this calldata.
+    function validatedCall(IValidator8141, bytes calldata data) external payable {
+        if (msg.sender != address(this)) {
+            revert InvalidCaller();
+        }
+        // The validator address in the parameter is for sigHash binding only.
+        // The actual validation happened in VERIFY frame.
+        IHook8141 hook = _loadExecutionHook();
+        bytes memory context;
+        bool callHook = address(hook) != HOOK_INSTALLED && address(hook) != HOOK_NOT_INSTALLED;
+        if (callHook) {
+            context = _doPreHook(hook, msg.value, data);
+        }
+        (bool success, bytes memory ret) = address(this).delegatecall(data);
+        if (!success) {
+            assembly {
+                revert(add(ret, 0x20), mload(ret))
+            }
+        }
+        if (callHook) {
+            _doPostHook(hook, context);
+        }
+    }
+
+    // ── ERC-1271 (native) ───────────────────────────────────────────────
+
+    function isValidSignature(bytes32 hash, bytes calldata data)
+        external
+        view
+        override
+        returns (bytes4 magicValue)
+    {
+        return _verifySignature(hash, data);
+    }
+
+    // ── Module management ───────────────────────────────────────────────
+
+    function installModule(uint256 moduleType, address module, bytes calldata initData)
+        external
+        payable
+        override
+        onlySelfOrRoot
+    {
+        if (moduleType == MODULE_TYPE_VALIDATOR) {
+            ValidationStorage storage vs = _validationStorage();
+            ValidationId vId = ValidatorLib8141.validatorToIdentifier(IValidator8141(module));
+            if (vs.validationConfig[vId].nonce == vs.currentNonce) {
+                unchecked {
+                    vs.currentNonce++;
+                }
+            }
+            ValidationConfig memory config =
+                ValidationConfig({nonce: vs.currentNonce, hook: IHook8141(address(bytes20(initData[0:20])))});
+            InstallValidatorDataFormat calldata data;
+            assembly {
+                data := add(initData.offset, 20)
+            }
+            _installValidation(vId, config, data.validatorData, data.hookData);
+            if (data.selectorData.length == 4) {
+                _grantAccess(vId, bytes4(data.selectorData[0:4]), true);
+            }
+        } else if (moduleType == MODULE_TYPE_EXECUTOR) {
+            InstallExecutorDataFormat calldata data;
+            assembly {
+                data := add(initData.offset, 20)
+            }
+            IHook8141 hook = IHook8141(address(bytes20(initData[0:20])));
+            _installExecutor(module, data.executorData, hook);
+            _installHook(hook, data.hookData);
+        } else if (moduleType == MODULE_TYPE_FALLBACK) {
+            InstallFallbackDataFormat calldata data;
+            assembly {
+                data := add(initData.offset, 24)
+            }
+            _installSelector(
+                bytes4(initData[0:4]), module, IHook8141(address(bytes20(initData[4:24]))), data.selectorData
+            );
+            _installHook(IHook8141(address(bytes20(initData[4:24]))), data.hookData);
+        } else if (
+            moduleType == MODULE_TYPE_HOOK || moduleType == MODULE_TYPE_POLICY || moduleType == MODULE_TYPE_SIGNER
+        ) {
+            // Force call onInstall for hook/policy/signer
+            // These are paired with their respective validator/executor/selector/permission
+            IModule8141(module).onInstall(initData);
+        } else {
+            revert InvalidModuleType();
+        }
         emit ModuleInstalled(moduleType, module);
     }
 
-    /// @notice Uninstall a module
-    function uninstallModule(address module) external {
-        if (msg.sender != address(this)) revert InvalidCaller();
-        if (!isModuleInstalled[module]) revert ModuleNotInstalled();
-
-        ModuleType moduleType = moduleTypes[module];
-
-        if (moduleType == ModuleType.VALIDATOR) {
-            IValidator8141 validator = IValidator8141(module);
-            if (address(validator) == address(rootValidator)) revert CannotRemoveRootValidator();
-            if (!isValidatorInstalled[validator]) revert ValidatorNotInstalled();
-            isValidatorInstalled[validator] = false;
-            validator.onUninstall();
-        } else if (moduleType == ModuleType.EXECUTOR) {
-            _uninstallExecutor(IExecutor(module));
-        } else if (moduleType == ModuleType.PRE_HOOK) {
-            _uninstallPreHook(IPreExecutionHook(module));
-        } else if (moduleType == ModuleType.POST_HOOK) {
-            _uninstallPostHook(IPostExecutionHook(module));
-        } else if (moduleType == ModuleType.FALLBACK_HANDLER) {
-            _uninstallFallbackHandler(IFallbackHandler(module));
+    function uninstallModule(uint256 moduleType, address module, bytes calldata deInitData)
+        external
+        payable
+        override
+        onlySelfOrRoot
+    {
+        if (moduleType == MODULE_TYPE_VALIDATOR) {
+            ValidationId vId = ValidatorLib8141.validatorToIdentifier(IValidator8141(module));
+            _clearValidationData(vId);
+        } else if (moduleType == MODULE_TYPE_EXECUTOR) {
+            _clearExecutorData(module);
+        } else if (moduleType == MODULE_TYPE_FALLBACK) {
+            bytes4 selector = bytes4(deInitData[0:4]);
+            (, address target) = _clearSelectorData(selector);
+            if (target == address(0)) {
+                return;
+            }
+            if (target != module) {
+                revert InvalidSelector();
+            }
+            deInitData = deInitData[4:];
+        } else if (moduleType == MODULE_TYPE_HOOK) {
+            ValidationId vId = _validationStorage().rootValidator;
+            if (_validationStorage().validationConfig[vId].hook == IHook8141(module)) {
+                _validationStorage().validationConfig[vId].hook = IHook8141(HOOK_INSTALLED);
+            }
+        } else if (moduleType == MODULE_TYPE_POLICY || moduleType == MODULE_TYPE_SIGNER) {
+            ValidationId rootVId = _validationStorage().rootValidator;
+            bytes32 permissionId = bytes32(deInitData[0:32]);
+            if (ValidatorLib8141.getType(rootVId) == VALIDATION_TYPE_PERMISSION) {
+                if (permissionId == bytes32(PermissionId.unwrap(ValidatorLib8141.getPermissionId(rootVId)))) {
+                    revert RootValidatorCannotBeRemoved();
+                }
+            }
+        } else {
+            revert InvalidModuleType();
         }
-
-        // Remove from module list (swap-and-pop)
-        address[] storage moduleList = _modulesByType[moduleType];
-        uint256 index = _moduleIndex[module] - 1;  // convert back to 0-indexed
-        uint256 lastIndex = moduleList.length - 1;
-
-        if (index != lastIndex) {
-            address lastModule = moduleList[lastIndex];
-            moduleList[index] = lastModule;
-            _moduleIndex[lastModule] = index + 1;  // update moved module's index
-        }
-
-        moduleList.pop();
-        delete _moduleIndex[module];
-
-        isModuleInstalled[module] = false;
+        ModuleLib8141.uninstallModule(module, deInitData);
         emit ModuleUninstalled(moduleType, module);
     }
 
-    function _installValidator(IValidator8141 validator, bytes calldata config) internal {
-        if (isValidatorInstalled[validator]) revert ValidatorAlreadyInstalled();
-        isValidatorInstalled[validator] = true;
-        validator.onInstall(config);
+    function installValidations(
+        ValidationId[] calldata vIds,
+        ValidationConfig[] memory configs,
+        bytes[] calldata validationData,
+        bytes[] calldata hookData
+    ) external payable onlySelfOrRoot {
+        _installValidations(vIds, configs, validationData, hookData);
     }
 
-    function _installExecutor(IExecutor executor, bytes calldata config) internal {
-        // config = abi.encode(bytes4[] selectors, uint48 validAfter, uint48 validUntil, uint8 frameModes)
-        (bytes4[] memory selectors, uint48 validAfter, uint48 validUntil, uint8 frameModes) =
-            abi.decode(config, (bytes4[], uint48, uint48, uint8));
-
-        for (uint256 i = 0; i < selectors.length; i++) {
-            executionConfig[selectors[i]] = ExecutionConfig({
-                validAfter: validAfter,
-                validUntil: validUntil,
-                executor: executor,
-                allowedFrameModes: frameModes
-            });
-            _executorSelectors[address(executor)].push(selectors[i]);  // Track selectors
+    function uninstallValidation(ValidationId vId, bytes calldata deinitData, bytes calldata hookDeinitData)
+        external
+        payable
+        onlySelfOrRoot
+    {
+        IHook8141 hook = _clearValidationData(vId);
+        ValidationType vType = ValidatorLib8141.getType(vId);
+        if (vType == VALIDATION_TYPE_VALIDATOR) {
+            IValidator8141 validator = ValidatorLib8141.getValidator(vId);
+            ModuleLib8141.uninstallModule(address(validator), deinitData);
+            emit ModuleUninstalled(MODULE_TYPE_VALIDATOR, address(validator));
+        } else if (vType == VALIDATION_TYPE_PERMISSION) {
+            PermissionId permission = ValidatorLib8141.getPermissionId(vId);
+            _uninstallPermission(permission, deinitData);
+        } else {
+            revert InvalidValidationType();
         }
-
-        executor.onInstall(config);
+        _uninstallHook(hook, hookDeinitData);
     }
 
-    function _installPreHook(IPreExecutionHook hook, bytes calldata config) internal {
-        // config = abi.encode(bytes4[] selectors, bytes hookData)
-        (bytes4[] memory selectors, bytes memory hookData) = abi.decode(config, (bytes4[], bytes));
-
-        for (uint256 i = 0; i < selectors.length; i++) {
-            _preHooks[selectors[i]].push(hook);
-            _preHookSelectors[address(hook)].push(selectors[i]);  // Track selectors
-        }
-
-        hook.onInstall(hookData);
+    function grantAccess(ValidationId vId, bytes4 selector, bool allow) external payable onlySelfOrRoot {
+        _grantAccess(vId, selector, allow);
     }
 
-    function _installPostHook(IPostExecutionHook hook, bytes calldata config) internal {
-        // config = abi.encode(bytes4[] selectors, bytes hookData)
-        (bytes4[] memory selectors, bytes memory hookData) = abi.decode(config, (bytes4[], bytes));
-
-        for (uint256 i = 0; i < selectors.length; i++) {
-            _postHooks[selectors[i]].push(hook);
-            _postHookSelectors[address(hook)].push(selectors[i]);  // Track selectors
-        }
-
-        hook.onInstall(hookData);
+    function invalidateNonce(uint32 nonce) external payable onlySelfOrRoot {
+        _invalidateNonce(nonce);
     }
 
-    function _installFallbackHandler(IFallbackHandler handler, bytes calldata config) internal {
-        // config = abi.encode(bytes4[] selectors, bytes handlerData)
-        (bytes4[] memory selectors, bytes memory handlerData) =
-            abi.decode(config, (bytes4[], bytes));
+    // ── Introspection ───────────────────────────────────────────────────
 
-        for (uint256 i = 0; i < selectors.length; i++) {
-            bytes4 selector = selectors[i];
-
-            // Prevent overwriting existing handlers
-            if (_fallbackHandlers[selector] != address(0)) {
-                revert HandlerAlreadyRegistered(selector);
-            }
-
-            _fallbackHandlers[selector] = address(handler);
-            _handlerSelectors[address(handler)].push(selector);
-        }
-
-        handler.onInstall(handlerData);
+    function supportsModule(uint256 moduleTypeId) external pure override returns (bool) {
+        return moduleTypeId > 0 && moduleTypeId < 7;
     }
 
-    /// @notice Uninstall an executor and clear its configs
-    function _uninstallExecutor(IExecutor executor) internal {
-        bytes4[] storage selectors = _executorSelectors[address(executor)];
-
-        // Clear executionConfig for all selectors owned by this executor
-        for (uint256 i = 0; i < selectors.length; i++) {
-            delete executionConfig[selectors[i]];
-        }
-
-        // Clear selector tracking
-        delete _executorSelectors[address(executor)];
-
-        executor.onUninstall();
-    }
-
-    /// @notice Remove a pre-hook from all registered selectors
-    function _uninstallPreHook(IPreExecutionHook hook) internal {
-        bytes4[] storage selectors = _preHookSelectors[address(hook)];
-
-        // Iterate through all selectors this hook is attached to
-        for (uint256 i = 0; i < selectors.length; i++) {
-            bytes4 selector = selectors[i];
-            IPreExecutionHook[] storage hooks = _preHooks[selector];
-
-            // Find and remove hook from array (swap-and-pop pattern)
-            for (uint256 j = 0; j < hooks.length; j++) {
-                if (hooks[j] == hook) {
-                    // Swap with last element
-                    hooks[j] = hooks[hooks.length - 1];
-                    // Remove last element
-                    hooks.pop();
-                    break;
-                }
-            }
-        }
-
-        // Clear selector tracking
-        delete _preHookSelectors[address(hook)];
-
-        hook.onUninstall();
-    }
-
-    /// @notice Remove a post-hook from all registered selectors
-    function _uninstallPostHook(IPostExecutionHook hook) internal {
-        bytes4[] storage selectors = _postHookSelectors[address(hook)];
-
-        // Iterate through all selectors this hook is attached to
-        for (uint256 i = 0; i < selectors.length; i++) {
-            bytes4 selector = selectors[i];
-            IPostExecutionHook[] storage hooks = _postHooks[selector];
-
-            // Find and remove hook from array (swap-and-pop pattern)
-            for (uint256 j = 0; j < hooks.length; j++) {
-                if (hooks[j] == hook) {
-                    // Swap with last element
-                    hooks[j] = hooks[hooks.length - 1];
-                    // Remove last element
-                    hooks.pop();
-                    break;
-                }
-            }
-        }
-
-        // Clear selector tracking
-        delete _postHookSelectors[address(hook)];
-
-        hook.onUninstall();
-    }
-
-    /// @notice Uninstall a fallback handler
-    function _uninstallFallbackHandler(IFallbackHandler handler) internal {
-        bytes4[] storage selectors = _handlerSelectors[address(handler)];
-
-        // Remove all selectors registered to this handler
-        for (uint256 i = 0; i < selectors.length; i++) {
-            delete _fallbackHandlers[selectors[i]];
-        }
-
-        delete _handlerSelectors[address(handler)];
-
-        handler.onUninstall();
-    }
-
-    // ── Module Introspection ──────────────────────────────────────────
-
-    /// @notice Get all installed modules of a specific type
-    /// @param moduleType The type of modules to query
-    /// @return modules Array of module addresses
-    function getInstalledModules(ModuleType moduleType)
+    function isModuleInstalled(uint256 moduleType, address module, bytes calldata additionalContext)
         external
         view
-        returns (address[] memory)
+        override
+        returns (bool)
     {
-        return _modulesByType[moduleType];
-    }
-
-    /// @notice Get pre-execution hooks for a selector
-    /// @param selector The function selector
-    /// @return hooks Array of pre-execution hooks
-    function getPreHooks(bytes4 selector)
-        external
-        view
-        returns (IPreExecutionHook[] memory)
-    {
-        return _preHooks[selector];
-    }
-
-    /// @notice Get post-execution hooks for a selector
-    /// @param selector The function selector
-    /// @return hooks Array of post-execution hooks
-    function getPostHooks(bytes4 selector)
-        external
-        view
-        returns (IPostExecutionHook[] memory)
-    {
-        return _postHooks[selector];
-    }
-
-    /// @notice Get all selectors owned by an executor
-    /// @param executor The executor address
-    /// @return selectors Array of function selectors
-    function getExecutorSelectors(address executor)
-        external
-        view
-        returns (bytes4[] memory)
-    {
-        return _executorSelectors[executor];
-    }
-
-    /// @notice Get the fallback handler for a selector
-    /// @param selector The function selector
-    /// @return handler Address of the fallback handler (address(0) if none)
-    function getFallbackHandler(bytes4 selector)
-        external
-        view
-        returns (address)
-    {
-        return _fallbackHandlers[selector];
-    }
-
-    /// @notice Get all selectors handled by a fallback handler
-    /// @param handler The handler address
-    /// @return selectors Array of function selectors
-    function getHandlerSelectors(address handler)
-        external
-        view
-        returns (bytes4[] memory)
-    {
-        return _handlerSelectors[handler];
-    }
-
-    /// @notice Get all selectors a pre-hook is attached to
-    /// @param hook The hook address
-    /// @return selectors Array of function selectors
-    function getPreHookSelectors(address hook)
-        external
-        view
-        returns (bytes4[] memory)
-    {
-        return _preHookSelectors[hook];
-    }
-
-    /// @notice Get all selectors a post-hook is attached to
-    /// @param hook The hook address
-    /// @return selectors Array of function selectors
-    function getPostHookSelectors(address hook)
-        external
-        view
-        returns (bytes4[] memory)
-    {
-        return _postHookSelectors[hook];
-    }
-
-    // ── Internal: SENDER frame lookup ─────────────────────────────────
-
-    /// @notice Find the SENDER frame that calls `validatedCall()`.
-    /// @dev Iterates all frames to find a SENDER-mode frame whose calldata
-    ///      starts with the `validatedCall` selector. Used by `validateFromSenderFrame`.
-    function _findValidatedCallFrame() internal pure returns (uint256) {
-        uint256 count = FrameTxLib.frameCount();
-        for (uint256 i = 0; i < count; i++) {
-            if (FrameTxLib.frameMode(i) == FRAME_MODE_SENDER
-                && bytes4(FrameTxLib.frameDataLoad(i, 0)) == this.validatedCall.selector)
-            {
-                return i;
-            }
+        if (moduleType == MODULE_TYPE_VALIDATOR) {
+            return address(
+                _validationStorage().validationConfig[ValidatorLib8141.validatorToIdentifier(IValidator8141(module))].hook
+            ) != HOOK_NOT_INSTALLED;
+        } else if (moduleType == MODULE_TYPE_EXECUTOR) {
+            return address(_executorConfig(module).hook) != HOOK_NOT_INSTALLED;
+        } else if (moduleType == MODULE_TYPE_FALLBACK) {
+            return _selectorConfig(bytes4(additionalContext[0:4])).target == module;
+        } else {
+            return false;
         }
-        revert NoValidatedCallFrame();
     }
 
-    // ── Fallback ──────────────────────────────────────────────────────
+    function accountId() external pure override returns (string memory) {
+        return "kernel8141.v0.1.0";
+    }
 
-    /// @notice Fallback function - routes to registered handlers
-    /// @dev Called for unknown function selectors. Checks _fallbackHandlers mapping.
+    function supportsExecutionMode(ExecMode mode) external pure override returns (bool) {
+        (CallType callType, ExecType execType, ExecModeSelector selector, ExecModePayload payload) =
+            ExecLib8141.decode(mode);
+        if (
+            callType != CALLTYPE_BATCH && callType != CALLTYPE_SINGLE && callType != CALLTYPE_DELEGATECALL
+                && callType != CALLTYPE_STATIC
+        ) {
+            return false;
+        }
+        if (
+            ExecType.unwrap(execType) != ExecType.unwrap(EXECTYPE_TRY)
+                && ExecType.unwrap(execType) != ExecType.unwrap(EXECTYPE_DEFAULT)
+        ) {
+            return false;
+        }
+        if (ExecModeSelector.unwrap(selector) != ExecModeSelector.unwrap(EXEC_MODE_DEFAULT)) {
+            return false;
+        }
+        if (ExecModePayload.unwrap(payload) != bytes22(0)) {
+            return false;
+        }
+        return true;
+    }
+
+    // ── Fallback routing ────────────────────────────────────────────────
+
     fallback() external payable {
-        bytes4 selector = msg.sig;
-        address handler = _fallbackHandlers[selector];
-
-        if (handler == address(0)) {
-            revert NoHandlerForSelector(selector);
+        SelectorConfig memory config = _selectorConfig(msg.sig);
+        bool success;
+        bytes memory result;
+        if (address(config.hook) == HOOK_NOT_INSTALLED) {
+            revert InvalidSelector();
         }
-
-        // Delegate to handler
-        bytes memory result = IFallbackHandler(handler).handleFallback(selector, msg.data);
-
+        bytes memory context;
+        if (address(config.hook) == HOOK_ONLY_ENTRYPOINT) {
+            // Only allow self-calls for entry-point-only selectors
+            if (msg.sender != address(this)) {
+                revert InvalidCaller();
+            }
+        } else if (address(config.hook) != HOOK_INSTALLED) {
+            context = _doPreHook(config.hook, msg.value, msg.data);
+        }
+        if (config.callType == CALLTYPE_SINGLE) {
+            (success, result) = ExecLib8141.doFallback2771Call(config.target);
+        } else if (config.callType == CALLTYPE_DELEGATECALL) {
+            (success, result) = ExecLib8141._executeDelegatecall(config.target, msg.data);
+        } else {
+            revert NotSupportedCallType();
+        }
+        if (!success) {
+            assembly {
+                revert(add(result, 0x20), mload(result))
+            }
+        }
+        if (address(config.hook) != HOOK_INSTALLED && address(config.hook) != HOOK_ONLY_ENTRYPOINT) {
+            _doPostHook(config.hook, context);
+        }
         assembly {
             return(add(result, 0x20), mload(result))
         }
     }
 
-    receive() external payable {}
+    receive() external payable {
+        emit Received(msg.sender, msg.value);
+    }
+
+    // ── Token receivers ─────────────────────────────────────────────────
+
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+
+    function onERC1155Received(address, address, uint256, uint256, bytes calldata) external pure returns (bytes4) {
+        return this.onERC1155Received.selector;
+    }
+
+    function onERC1155BatchReceived(address, address, uint256[] calldata, uint256[] calldata, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
+        return this.onERC1155BatchReceived.selector;
+    }
+
+    // ── Internal helpers ────────────────────────────────────────────────
+
+    /// @dev Ensure we're executing in a VERIFY frame.
+    function _requireVerifyFrame() internal pure {
+        require(FrameTxLib.currentFrameMode() == FRAME_MODE_VERIFY, "Not VERIFY frame");
+    }
+
+    /// @dev Find the first SENDER frame index after the current VERIFY frame.
+    /// @return idx The SENDER frame index
+    function _findSenderFrameIndex() internal pure returns (uint256 idx) {
+        uint256 count = FrameTxLib.frameCount();
+        uint256 current = FrameTxLib.currentFrameIndex();
+        for (idx = current + 1; idx < count; idx++) {
+            if (FrameTxLib.frameMode(idx) == FRAME_MODE_SENDER) {
+                return idx;
+            }
+        }
+        revert("No SENDER frame found");
+    }
 }
