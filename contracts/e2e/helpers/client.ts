@@ -8,6 +8,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { RPC_URL, DEV_KEY, CHAIN_DEF } from "./config.js";
+import { fund as logFund } from "./log.js";
 
 export async function waitForReceipt(
   publicClient: any,
@@ -53,4 +54,5 @@ export async function fundAccount(
     maxPriorityFeePerGas: 1_000_000_000n,
   });
   await waitForReceipt(publicClient, fundHash);
+  logFund(to, `${ethAmount} ETH`);
 }

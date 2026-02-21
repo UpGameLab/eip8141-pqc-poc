@@ -1,27 +1,8 @@
 import type { Address } from "viem";
+import { printReceipt } from "./log.js";
 
-export const FRAME_STATUS_NAMES: Record<string, string> = {
-  "0x0": "Failed",
-  "0x1": "Success",
-  "0x2": "ApproveExecution",
-  "0x3": "ApprovePayment",
-  "0x4": "ApproveBoth",
-};
-
-export function printReceipt(r: any) {
-  const statusName = FRAME_STATUS_NAMES[r.status] || r.status;
-  console.log(
-    `  Status: ${statusName}, GasUsed: ${BigInt(r.gasUsed)}, Type: ${r.type}`
-  );
-  if (r.payer) console.log(`  Payer: ${r.payer}`);
-  if (r.frameReceipts) {
-    for (let i = 0; i < r.frameReceipts.length; i++) {
-      const fr = r.frameReceipts[i];
-      const name = FRAME_STATUS_NAMES[fr.status] || `Unknown(${fr.status})`;
-      console.log(`  Frame ${i}: ${name}, GasUsed: ${BigInt(fr.gasUsed)}`);
-    }
-  }
-}
+// Re-export printReceipt from log.ts
+export { printReceipt };
 
 export function verifyReceipt(
   receipt: any,
@@ -58,7 +39,6 @@ export function verifyReceipt(
         `Frame receipts count: got ${receipt.frameReceipts.length}, want ${expectFrameCount}`
       );
     }
-    // VERIFY frame (frame 0)
     const verifyStatus = receipt.frameReceipts[0].status;
     if (expectVerifyStatus.includes("|")) {
       const allowed = expectVerifyStatus.split("|");
@@ -72,7 +52,6 @@ export function verifyReceipt(
         `VERIFY frame: got ${verifyStatus}, want ${expectVerifyStatus}`
       );
     }
-    // SENDER frame (frame 1)
     if (receipt.frameReceipts[1].status !== expectSenderStatus) {
       throw new Error(
         `SENDER frame: got ${receipt.frameReceipts[1].status}, want ${expectSenderStatus}`

@@ -4,6 +4,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { CHAIN_DEF } from "./config.js";
 import { waitForReceipt } from "./client.js";
+import { deploy as logDeploy } from "./log.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -27,7 +28,8 @@ export async function deployContract(
   walletClient: any,
   publicClient: any,
   bytecode: Hex,
-  gas = 3_000_000n
+  gas = 3_000_000n,
+  label?: string
 ): Promise<{ hash: Hash; address: Address }> {
   const devAddr = walletClient.account.address;
   const nonce = await publicClient.getTransactionCount({ address: devAddr });
@@ -48,6 +50,6 @@ export async function deployContract(
   if (receipt.status !== "0x1") {
     throw new Error(`Deploy failed: status=${receipt.status}, tx=${hash}`);
   }
-  console.log(`  Deployed at ${expectedAddr} (tx: ${hash})`);
+  logDeploy(label || "Contract", expectedAddr, hash);
   return { hash, address: expectedAddr };
 }

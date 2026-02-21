@@ -1,8 +1,6 @@
 /**
  * E2E: CoinbaseSmartWallet8141 ECDSA owner execution (Tests 1-2)
  *
- * Tests multi-owner ECDSA signing with owner index-based signature wrapping.
- *
  * Usage: cd contracts && npx tsx e2e/coinbase/coinbase-ecdsa.ts
  */
 
@@ -22,6 +20,7 @@ import { waitForReceipt } from "../helpers/client.js";
 import { computeSigHash, encodeFrameTx, type FrameTxParams } from "../helpers/frame-tx.js";
 import { printReceipt, verifyReceipt } from "../helpers/receipt.js";
 import { walletAbi } from "../helpers/abis/coinbase.js";
+import { testHeader, testPassed, summary, fatal } from "../helpers/log.js";
 import { deployCoinbaseTestbed } from "./setup.js";
 
 async function sendFrameTx(
@@ -54,21 +53,17 @@ async function sendFrameTx(
   const rHex = sig.r.toString(16).padStart(64, "0");
   const sHex = sig.s.toString(16).padStart(64, "0");
   const v = sig.recovery;
-  const ecdsaSig = hexToBytes(
-    ("0x" + rHex + sHex + v.toString(16).padStart(2, "0")) as Hex
-  );
+  const ecdsaSig = hexToBytes(("0x" + rHex + sHex + v.toString(16).padStart(2, "0")) as Hex);
 
   const signatureWrapper = encodeAbiParameters(
     parseAbiParameters("uint256, bytes"),
     [BigInt(ownerIndex), bytesToHex(ecdsaSig)]
   );
-
   const validateCalldata = encodeFunctionData({
     abi: walletAbi,
     functionName: "validate",
     args: [signatureWrapper, 2],
   });
-
   frameTxParams.frames[0].data = hexToBytes(validateCalldata);
 
   const rawTx = encodeFrameTx(frameTxParams);
@@ -76,64 +71,42 @@ async function sendFrameTx(
     method: "eth_sendRawTransaction" as any,
     params: [rawTx],
   })) as Hash;
-
   return await waitForReceipt(publicClient, txHash);
 }
 
 async function main() {
   const ctx = await deployCoinbaseTestbed();
 
-  // Test 1: Execute with ECDSA Owner 1
-  console.log(`${"~".repeat(70)}`);
-  console.log(`Test 1: Execute with ECDSA Owner 1`);
-  console.log(`${"~".repeat(70)}`);
+  testHeader(1, "Execute with ECDSA Owner 1");
   {
     const calldata = encodeFunctionData({
       abi: walletAbi,
       functionName: "execute",
       args: [DEAD_ADDR, 0n, "0x"],
     });
-    const receipt = await sendFrameTx(
-      ctx.publicClient,
-      ctx.walletAddr,
-      calldata,
-      0,
-      DEV_KEY
-    );
+    const receipt = await sendFrameTx(ctx.publicClient, ctx.walletAddr, calldata, 0, DEV_KEY);
     printReceipt(receipt);
     verifyReceipt(receipt, ctx.walletAddr, { expectVerifyStatus: "0x4|0x2" });
-    console.log("PASSED - ECDSA Owner 1 executed successfully\n");
+    testPassed("ECDSA Owner 1 executed successfully");
   }
 
-  // Test 2: Execute with ECDSA Owner 2
-  console.log(`${"~".repeat(70)}`);
-  console.log(`Test 2: Execute with ECDSA Owner 2`);
-  console.log(`${"~".repeat(70)}`);
+  testHeader(2, "Execute with ECDSA Owner 2");
   {
     const calldata = encodeFunctionData({
       abi: walletAbi,
       functionName: "execute",
       args: [DEAD_ADDR, 0n, "0x"],
     });
-    const receipt = await sendFrameTx(
-      ctx.publicClient,
-      ctx.walletAddr,
-      calldata,
-      1,
-      OWNER2_KEY
-    );
+    const receipt = await sendFrameTx(ctx.publicClient, ctx.walletAddr, calldata, 1, OWNER2_KEY);
     printReceipt(receipt);
     verifyReceipt(receipt, ctx.walletAddr, { expectVerifyStatus: "0x4|0x2" });
-    console.log("PASSED - ECDSA Owner 2 executed successfully\n");
+    testPassed("ECDSA Owner 2 executed successfully");
   }
 
-  console.log(`${"=".repeat(70)}`);
-  console.log(`ALL 2 COINBASE ECDSA TESTS PASSED`);
-  console.log(`${"=".repeat(70)}\n`);
+  summary("Coinbase ECDSA", 2);
 }
 
 main().catch((err) => {
-  console.error("FATAL:", err.message || err);
-  console.error("Stack:", err.stack);
+  fatal(err);
   process.exit(1);
 });
