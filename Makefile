@@ -1,6 +1,7 @@
 .PHONY: build build-geth build-solc submodules clean \
        contracts test devnet devnet-stop \
-       e2e e2e-simple e2e-kernel e2e-kernel-validator e2e-hooked e2e-coinbase-ecdsa e2e-coinbase-webauthn \
+       e2e e2e-simple e2e-kernel e2e-kernel-validator e2e-hooked \
+       e2e-coinbase-ecdsa e2e-coinbase-webauthn e2e-light-account \
        benchmark
 
 BUILD_DIR := $(CURDIR)/build
@@ -57,6 +58,9 @@ e2e-coinbase-ecdsa:
 
 e2e-coinbase-webauthn:
 	cd contracts && npx tsx e2e/coinbase/coinbase-webauthn.ts
+
+e2e-light-account:
+	cd contracts && npx tsx e2e/light-account/light-account-ecdsa.ts
 
 e2e:
 	cd contracts && npx tsx e2e/run-all.ts
