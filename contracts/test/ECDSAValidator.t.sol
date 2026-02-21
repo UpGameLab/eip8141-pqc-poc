@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {ECDSAValidator} from "../src/example/ECDSAValidator.sol";
+import {ECDSAValidator} from "../src/example/validators/ECDSAValidator.sol";
 
 contract ECDSAValidatorTest is Test {
     ECDSAValidator validator;
@@ -46,7 +46,7 @@ contract ECDSAValidatorTest is Test {
 
     // ── validateSignature ────────────────────────────────────────────
 
-    function test_validateSignature_valid() public view {
+    function test_validateSignature_valid() public {
         bytes32 hash = keccak256("test message");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
         bytes memory signature = abi.encodePacked(r, s, v);
@@ -65,7 +65,7 @@ contract ECDSAValidatorTest is Test {
         assertFalse(valid);
     }
 
-    function test_validateSignature_invalidLength() public view {
+    function test_validateSignature_invalidLength() public {
         bytes32 hash = keccak256("test message");
         bytes memory signature = hex"0011223344"; // 5 bytes, not 65
 
@@ -73,7 +73,7 @@ contract ECDSAValidatorTest is Test {
         assertFalse(valid);
     }
 
-    function test_validateSignature_uninitializedAccount() public view {
+    function test_validateSignature_uninitializedAccount() public {
         bytes32 hash = keccak256("test message");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
         bytes memory signature = abi.encodePacked(r, s, v);
@@ -82,7 +82,7 @@ contract ECDSAValidatorTest is Test {
         assertFalse(valid);
     }
 
-    function test_validateSignature_normalizedV() public view {
+    function test_validateSignature_normalizedV() public {
         bytes32 hash = keccak256("test message");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
         // Pass v as 0 or 1 (pre-EIP-155), should be normalized to 27/28

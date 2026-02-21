@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {IValidator8141} from "../interfaces/IValidator8141.sol";
+import {IValidator8141} from "../../interfaces/IValidator8141.sol";
 
 /// @title ECDSAValidator
 /// @notice ECDSA signature validator for Kernel8141 accounts.
 /// @dev Each account has one owner stored in this contract's storage.
-///      Called via STATICCALL during validation (VERIFY frames)
-///      and via CALL during install/uninstall (SENDER frames).
+///      Called via CALL during validation (VERIFY frames) and install/uninstall (SENDER frames).
 ///      Storage is keyed by account address (msg.sender during onInstall).
 contract ECDSAValidator is IValidator8141 {
     /// @dev owner[account] = ECDSA public key owner of that account
@@ -23,7 +22,7 @@ contract ECDSAValidator is IValidator8141 {
         address account,
         bytes32 sigHash,
         bytes calldata signature
-    ) external view override returns (bool valid) {
+    ) external override returns (bool valid) {
         if (signature.length != 65) return false;
 
         bytes32 r = bytes32(signature[0:32]);

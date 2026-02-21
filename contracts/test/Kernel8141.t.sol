@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {Kernel8141} from "../src/example/Kernel8141.sol";
-import {ECDSAValidator} from "../src/example/ECDSAValidator.sol";
+import {ECDSAValidator} from "../src/example/validators/ECDSAValidator.sol";
 import {IValidator8141} from "../src/interfaces/IValidator8141.sol";
 
 contract Kernel8141Test is Test {
