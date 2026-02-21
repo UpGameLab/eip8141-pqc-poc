@@ -1,7 +1,24 @@
 export const walletAbi = [
   {
     type: "function",
+    name: "initialize",
+    inputs: [{ name: "owners", type: "bytes[]" }],
+    outputs: [],
+    stateMutability: "payable",
+  },
+  {
+    type: "function",
     name: "validate",
+    inputs: [
+      { name: "signature", type: "bytes" },
+      { name: "scope", type: "uint8" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "validateCrossChain",
     inputs: [
       { name: "signature", type: "bytes" },
       { name: "scope", type: "uint8" },
@@ -22,9 +39,81 @@ export const walletAbi = [
   },
   {
     type: "function",
+    name: "executeBatch",
+    inputs: [
+      {
+        name: "calls",
+        type: "tuple[]",
+        components: [
+          { name: "target", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "data", type: "bytes" },
+        ],
+      },
+    ],
+    outputs: [],
+    stateMutability: "payable",
+  },
+  {
+    type: "function",
+    name: "executeWithoutChainIdValidation",
+    inputs: [{ name: "calls", type: "bytes[]" }],
+    outputs: [],
+    stateMutability: "payable",
+  },
+  {
+    type: "function",
+    name: "isValidSignature",
+    inputs: [
+      { name: "hash", type: "bytes32" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [{ name: "", type: "bytes4" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "replaySafeHash",
+    inputs: [{ name: "hash", type: "bytes32" }],
+    outputs: [{ name: "", type: "bytes32" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "domainSeparator",
+    inputs: [],
+    outputs: [{ name: "", type: "bytes32" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "isOwnerAddress",
     inputs: [{ name: "owner", type: "address" }],
     outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "isOwnerPublicKey",
+    inputs: [
+      { name: "x", type: "bytes32" },
+      { name: "y", type: "bytes32" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "isOwnerBytes",
+    inputs: [{ name: "owner", type: "bytes" }],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "ownerAtIndex",
+    inputs: [{ name: "index", type: "uint256" }],
+    outputs: [{ name: "", type: "bytes" }],
     stateMutability: "view",
   },
   {
@@ -36,29 +125,104 @@ export const walletAbi = [
   },
   {
     type: "function",
-    name: "isOwnerPublicKey",
-    inputs: [
-      { name: "x", type: "uint256" },
-      { name: "y", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
+    name: "ownerCount",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "removedOwnersCount",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "addOwnerAddress",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
     name: "addOwnerPublicKey",
     inputs: [
-      { name: "x", type: "uint256" },
-      { name: "y", type: "uint256" },
+      { name: "x", type: "bytes32" },
+      { name: "y", type: "bytes32" },
     ],
     outputs: [],
     stateMutability: "nonpayable",
   },
   {
     type: "function",
-    name: "ownerAtIndex",
-    inputs: [{ name: "index", type: "uint256" }],
-    outputs: [{ name: "", type: "bytes" }],
+    name: "removeOwnerAtIndex",
+    inputs: [
+      { name: "index", type: "uint256" },
+      { name: "owner", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "removeLastOwner",
+    inputs: [
+      { name: "index", type: "uint256" },
+      { name: "owner", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "implementation",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "canSkipChainIdValidation",
+    inputs: [{ name: "functionSelector", type: "bytes4" }],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "pure",
+  },
+] as const;
+
+export const factoryAbi = [
+  {
+    type: "function",
+    name: "createAccount",
+    inputs: [
+      { name: "owners", type: "bytes[]" },
+      { name: "nonce", type: "uint256" },
+    ],
+    outputs: [{ name: "account", type: "address" }],
+    stateMutability: "payable",
+  },
+  {
+    type: "function",
+    name: "getAddress",
+    inputs: [
+      { name: "owners", type: "bytes[]" },
+      { name: "nonce", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "initCodeHash",
+    inputs: [],
+    outputs: [{ name: "", type: "bytes32" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "implementation",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
     stateMutability: "view",
   },
 ] as const;
