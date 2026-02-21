@@ -1,4 +1,4 @@
-.PHONY: build build-geth build-solc submodules clean \
+.PHONY: build build-geth build-solc submodules clean clean-geth clean-solc \
        contracts test devnet devnet-stop \
        e2e e2e-simple e2e-kernel e2e-kernel-validator e2e-hooked \
        e2e-coinbase-ecdsa e2e-coinbase-webauthn e2e-light-account \
@@ -68,6 +68,12 @@ e2e:
 benchmark:
 	cd contracts && npx tsx e2e/benchmark/gas-benchmark.ts
 
-clean:
-	rm -rf $(BUILD_DIR)
+clean: clean-geth clean-solc
+
+clean-geth:
+	rm -f $(GETH_BIN)
 	$(MAKE) -C 8141-geth clean
+
+clean-solc:
+	rm -f $(SOLC_BIN)
+	rm -rf $(BUILD_DIR)/solc
