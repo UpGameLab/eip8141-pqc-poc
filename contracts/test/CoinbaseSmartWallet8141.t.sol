@@ -2,8 +2,8 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {CoinbaseSmartWallet8141} from "../src/example/CoinbaseSmartWallet8141.sol";
-import {CoinbaseSmartWalletFactory8141} from "../src/example/CoinbaseSmartWalletFactory8141.sol";
+import {CoinbaseSmartWallet8141} from "../src/example/coinbase-smart-wallet/CoinbaseSmartWallet8141.sol";
+import {CoinbaseSmartWalletFactory8141} from "../src/example/coinbase-smart-wallet/CoinbaseSmartWalletFactory8141.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 
 contract CoinbaseSmartWallet8141Test is Test {

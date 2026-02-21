@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {FrameTxLib} from "../FrameTxLib.sol";
-import {WebAuthn} from "../lib/WebAuthn.sol";
+import {FrameTxLib} from "../../FrameTxLib.sol";
+import {WebAuthn} from "../../lib/WebAuthn.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Receiver} from "solady/accounts/Receiver.sol";
 
