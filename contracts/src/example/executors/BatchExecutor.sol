@@ -1,46 +1,24 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {IExecutor} from "../../interfaces/IExecutor.sol";
+import {IExecutor8141} from "../../interfaces/IExecutor8141.sol";
+import {MODULE_TYPE_EXECUTOR} from "../../types/Constants8141.sol";
 
 /// @title BatchExecutor
-/// @notice Executor that performs atomic batch execution.
-/// @dev Decodes an array of calls and executes them sequentially.
-///      Reverts if any call fails.
-contract BatchExecutor is IExecutor {
-    error BatchLengthMismatch();
-    error BatchCallFailed(uint256 index);
+/// @notice Batch executor module for Kernel8141.
+/// @dev Migrated to IExecutor8141 (extends IModule8141).
+///      In Kernel v3 pattern, executors call kernel.executeFromExecutor()
+///      with CALLTYPE_BATCH for atomic batch execution.
+contract BatchExecutor is IExecutor8141 {
+    function onInstall(bytes calldata) external payable override {}
 
-    /// @inheritdoc IExecutor
-    /// @dev data is abi.encode(address[] targets, uint256[] values, bytes[] datas)
-    function executeWithData(
-        address, // target unused for batch
-        uint256, // value unused for batch
-        bytes calldata data
-    ) external payable returns (bytes memory) {
-        (address[] memory targets, uint256[] memory values, bytes[] memory datas) =
-            abi.decode(data, (address[], uint256[], bytes[]));
+    function onUninstall(bytes calldata) external payable override {}
 
-        if (targets.length != values.length || values.length != datas.length) {
-            revert BatchLengthMismatch();
-        }
-
-        for (uint256 i = 0; i < targets.length; i++) {
-            (bool success,) = targets[i].call{value: values[i]}(datas[i]);
-            if (!success) revert BatchCallFailed(i);
-        }
-
-        return "";
+    function isModuleType(uint256 typeID) external pure override returns (bool) {
+        return typeID == MODULE_TYPE_EXECUTOR;
     }
 
-    /// @inheritdoc IExecutor
-    function onInstall(bytes calldata) external pure {}
-
-    /// @inheritdoc IExecutor
-    function onUninstall() external pure {}
-
-    /// @inheritdoc IExecutor
-    function isInitialized(address) external pure returns (bool) {
-        return true; // Stateless, always initialized
+    function isInitialized(address) external pure override returns (bool) {
+        return true;
     }
 }

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {IPreExecutionHook} from "../../interfaces/IHook.sol";
+import {IHook8141} from "../../interfaces/IHook8141.sol";
 import {SessionKeyValidator} from "../validators/SessionKeyValidator.sol";
+import {MODULE_TYPE_HOOK} from "../../types/Constants8141.sol";
 
 /// @title SessionKeyPermissionHook
-/// @notice Pre-execution hook that enforces session key permissions.
-/// @dev Must be installed alongside SessionKeyValidator.
-contract SessionKeyPermissionHook is IPreExecutionHook {
+/// @notice Unified hook that enforces session key permissions (spending, selectors, targets).
+/// @dev Migrated from IPreExecutionHook to IHook8141. Must be installed alongside SessionKeyValidator.
+contract SessionKeyPermissionHook is IHook8141 {
     SessionKeyValidator public immutable sessionKeyValidator;
 
     error SpendingLimitExceeded(uint256 requested, uint256 available);
@@ -18,13 +19,15 @@ contract SessionKeyPermissionHook is IPreExecutionHook {
         sessionKeyValidator = _validator;
     }
 
-    /// @inheritdoc IPreExecutionHook
-    function preExecute(
-        address target,
-        uint256 value,
-        bytes calldata data
-    ) external override {
-        // msg.sender = kernel
+    // ── IHook8141 ───────────────────────────────────────────────────────
+
+    /// @inheritdoc IHook8141
+    function preCheck(address, uint256 msgValue, bytes calldata msgData)
+        external
+        payable
+        override
+        returns (bytes memory hookData)
+    {
         address account = msg.sender;
 
         // Retrieve session key from transient storage (set during validation)
@@ -34,26 +37,25 @@ contract SessionKeyPermissionHook is IPreExecutionHook {
         }
 
         // If no session key in transient storage, this is not a session key transaction
-        if (sessionKeyAddr == address(0)) return;
+        if (sessionKeyAddr == address(0)) return hex"";
 
         SessionKeyValidator.SessionPermissions memory perms =
             sessionKeyValidator.getPermissions(account, sessionKeyAddr);
 
         // 1. Check spending limit
-        if (value > 0) {
+        if (msgValue > 0) {
             uint256 available = perms.spendingLimit - perms.spentAmount;
-            if (value > available) {
-                revert SpendingLimitExceeded(value, available);
+            if (msgValue > available) {
+                revert SpendingLimitExceeded(msgValue, available);
             }
-            // Record spending
-            sessionKeyValidator.recordSpending(account, sessionKeyAddr, value);
+            sessionKeyValidator.recordSpending(account, sessionKeyAddr, msgValue);
         }
 
         // 2. Check selector whitelist
-        if (perms.allowedSelectors.length > 0 && data.length >= 4) {
-            bytes4 selector = bytes4(data[0:4]);
+        if (perms.allowedSelectors.length > 0 && msgData.length >= 4) {
+            bytes4 selector = bytes4(msgData[0:4]);
             bool allowed = false;
-            for (uint i = 0; i < perms.allowedSelectors.length; i++) {
+            for (uint256 i = 0; i < perms.allowedSelectors.length; i++) {
                 if (perms.allowedSelectors[i] == selector) {
                     allowed = true;
                     break;
@@ -62,31 +64,23 @@ contract SessionKeyPermissionHook is IPreExecutionHook {
             if (!allowed) revert SelectorNotAllowed(selector);
         }
 
-        // 3. Check target whitelist
-        if (perms.allowedTargets.length > 0) {
-            bool allowed = false;
-            for (uint i = 0; i < perms.allowedTargets.length; i++) {
-                if (perms.allowedTargets[i] == target) {
-                    allowed = true;
-                    break;
-                }
-            }
-            if (!allowed) revert TargetNotAllowed(target);
-        }
+        return hex"";
     }
 
-    /// @inheritdoc IPreExecutionHook
-    function onInstall(bytes calldata) external pure override {
-        // Stateless hook, no installation needed
+    /// @inheritdoc IHook8141
+    function postCheck(bytes calldata) external payable override {}
+
+    // ── IModule8141 ─────────────────────────────────────────────────────
+
+    function onInstall(bytes calldata) external payable override {}
+
+    function onUninstall(bytes calldata) external payable override {}
+
+    function isModuleType(uint256 typeID) external pure override returns (bool) {
+        return typeID == MODULE_TYPE_HOOK;
     }
 
-    /// @inheritdoc IPreExecutionHook
-    function onUninstall() external pure override {
-        // Stateless hook, no uninstallation needed
-    }
-
-    /// @inheritdoc IPreExecutionHook
     function isInitialized(address) external pure override returns (bool) {
-        return true; // Stateless, always initialized
+        return true;
     }
 }
