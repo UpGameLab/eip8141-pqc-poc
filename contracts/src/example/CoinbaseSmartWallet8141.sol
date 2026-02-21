@@ -3,18 +3,28 @@ pragma solidity ^0.8.28;
 
 import {FrameTxLib} from "../FrameTxLib.sol";
 import {WebAuthn} from "../lib/WebAuthn.sol";
+import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
+import {Receiver} from "solady/accounts/Receiver.sol";
 
 /// @title CoinbaseSmartWallet8141
-/// @notice EIP-8141 native smart wallet with multi-owner support
-/// @dev Ported from Coinbase Smart Wallet (ERC-4337) to EIP-8141 frame transactions
-contract CoinbaseSmartWallet8141 {
+/// @notice EIP-8141 native smart wallet with multi-owner support (ECDSA + WebAuthn).
+/// @dev Ported from Coinbase Smart Wallet (ERC-4337) to EIP-8141 frame transactions.
+///      Feature-parity with the original: UUPS proxy, ERC-1271, cross-chain replay,
+///      multi-owner management with ERC-7201 namespaced storage.
+contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
     using FrameTxLib for *;
 
-    // ── Frame Mode Constants ──────────────────────────────────────────────
+    // ── Frame Mode Constants ──────────────────────────────────────────
     uint8 internal constant FRAME_MODE_VERIFY = 1;
     uint8 internal constant FRAME_MODE_SENDER = 2;
 
-    /// @notice Owner data - can be Ethereum address (32 bytes) or WebAuthn public key (64 bytes)
+    // ── ERC-1271 ──────────────────────────────────────────────────────
+    bytes4 internal constant ERC1271_MAGICVALUE = 0x1626ba7e;
+    bytes4 internal constant ERC1271_INVALID = 0xffffffff;
+    bytes32 private constant _MESSAGE_TYPEHASH = keccak256("CoinbaseSmartWalletMessage(bytes32 hash)");
+
+    // ── ERC-7201 Namespaced Storage ───────────────────────────────────
+    /// @custom:storage-location erc7201:coinbase.storage.CoinbaseSmartWallet8141
     struct OwnerStorage {
         uint256 nextOwnerIndex;
         uint256 removedOwnersCount;
@@ -22,236 +32,329 @@ contract CoinbaseSmartWallet8141 {
         mapping(bytes => bool) isOwner;
     }
 
-    /// @notice Signature wrapper for multi-owner validation
+    /// @dev keccak256(abi.encode(uint256(keccak256("coinbase.storage.CoinbaseSmartWallet8141")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant _OWNER_STORAGE_SLOT =
+        0xdb0a03efc38f2b109622bd0ee19bb92b9a71192dfb607cd9716afe65948e8100;
+
+    // ── Structs ───────────────────────────────────────────────────────
     struct SignatureWrapper {
         uint256 ownerIndex;
         bytes signatureData;
     }
 
-    /// @notice Call struct for batch execution
     struct Call {
         address target;
         uint256 value;
         bytes data;
     }
 
-    OwnerStorage internal _owners;
-
+    // ── Errors ────────────────────────────────────────────────────────
+    error Initialized();
     error Unauthorized();
     error InvalidOwner();
     error NoOwnerAtIndex(uint256 index);
     error AlreadyOwner(bytes owner);
     error LastOwner();
+    error NotLastOwner(uint256 ownersRemaining);
+    error WrongOwnerAtIndex(uint256 index, bytes expectedOwner, bytes actualOwner);
     error InvalidOwnerBytesLength(bytes owner);
     error InvalidEthereumAddressOwner(bytes owner);
     error InvalidFrameMode();
-    error ExecutionFailed();
+    error SelectorNotAllowed(bytes4 selector);
+    error InvalidImplementation(address implementation);
 
-    event OwnerAdded(uint256 indexed index, bytes owner);
-    event OwnerRemoved(uint256 indexed index, bytes owner);
-    event Executed(address indexed target, uint256 value, bytes data);
+    // ── Events ────────────────────────────────────────────────────────
+    event AddOwner(uint256 indexed index, bytes owner);
+    event RemoveOwner(uint256 indexed index, bytes owner);
 
-    modifier onlyInSenderFrame() {
-        if (FrameTxLib.currentFrameMode() != FRAME_MODE_SENDER) {
-            revert InvalidFrameMode();
+    // ── Modifiers ─────────────────────────────────────────────────────
+
+    /// @notice Allows calls from SENDER frame (msg.sender == address(this)) or owner EOA.
+    modifier onlySenderFrameOrOwner() {
+        if (msg.sender != address(this)) {
+            _checkOwner();
         }
         _;
     }
 
+    /// @notice Allows calls from owner or self.
     modifier onlyOwner() {
-        if (!_isOwner(msg.sender)) revert Unauthorized();
+        _checkOwner();
         _;
     }
 
-    /// @notice Initialize the wallet with owners
-    /// @param owners Array of owner bytes (32 bytes for address, 64 bytes for WebAuthn)
-    constructor(bytes[] memory owners) {
+    // ── Constructor (locks implementation) ─────────────────────────────
+
+    constructor() {
+        bytes[] memory owners = new bytes[](1);
+        owners[0] = abi.encode(address(0));
         _initializeOwners(owners);
     }
 
-    /// @notice Validate frame transaction signature (VERIFY frame)
-    /// @param signature SignatureWrapper containing ownerIndex and signature data
-    /// @param scope Validation scope (unused in this implementation)
+    // ── Initialization ────────────────────────────────────────────────
+
+    /// @notice Initialize the account with owners. Can only be called once.
+    function initialize(bytes[] calldata owners) external payable {
+        if (_getOwnerStorage().nextOwnerIndex != 0) {
+            revert Initialized();
+        }
+        _initializeOwners(owners);
+    }
+
+    // ── Validation (VERIFY Frame) ─────────────────────────────────────
+
+    /// @notice Validate frame transaction signature (VERIFY frame).
     function validate(bytes calldata signature, uint8 scope) external {
         if (FrameTxLib.currentFrameMode() != FRAME_MODE_VERIFY) {
             revert InvalidFrameMode();
         }
 
-        // Decode as tuple instead of struct to avoid compiler struct decode issue
         (uint256 ownerIndex, bytes memory signatureData) = abi.decode(signature, (uint256, bytes));
-
         bytes32 sigHash = FrameTxLib.sigHash();
 
         if (!_validateSignature(ownerIndex, sigHash, signatureData)) {
             revert Unauthorized();
         }
 
-        FrameTxLib.approveEmpty(FrameTxLib.SCOPE_BOTH);
+        FrameTxLib.approveEmpty(scope);
     }
 
-    /// @notice Execute a call (SENDER frame only)
-    /// @param target The address to call
-    /// @param value The value to send
-    /// @param data The calldata
-    function execute(address target, uint256 value, bytes calldata data) external payable onlyInSenderFrame {
-        _call(target, value, data);
-        emit Executed(target, value, data);
-    }
-
-    /// @notice Execute multiple calls (SENDER frame only)
-    /// @param calls Array of Call structs
-    function executeBatch(Call[] calldata calls) external payable onlyInSenderFrame {
-        for (uint256 i = 0; i < calls.length; i++) {
-            _call(calls[i].target, calls[i].value, calls[i].data);
-            emit Executed(calls[i].target, calls[i].value, calls[i].data);
+    /// @notice Validate a cross-chain frame transaction (VERIFY frame).
+    /// @dev Computes a chain-agnostic hash from the SENDER frame calldata.
+    ///      The SENDER frame must call executeWithoutChainIdValidation().
+    function validateCrossChain(bytes calldata signature, uint8 scope) external {
+        if (FrameTxLib.currentFrameMode() != FRAME_MODE_VERIFY) {
+            revert InvalidFrameMode();
         }
+
+        uint256 senderFrameIdx = _findSenderFrameIndex();
+
+        // Verify SENDER frame calls executeWithoutChainIdValidation
+        bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
+        if (senderSelector != this.executeWithoutChainIdValidation.selector) {
+            revert SelectorNotAllowed(senderSelector);
+        }
+
+        // Compute cross-chain hash (same on all chains for the same operation)
+        address sender = FrameTxLib.txSender();
+        bytes memory senderCalldata = FrameTxLib.frameData(senderFrameIdx);
+        bytes32 crossChainHash = keccak256(abi.encode(sender, keccak256(senderCalldata)));
+
+        (uint256 ownerIndex, bytes memory signatureData) = abi.decode(signature, (uint256, bytes));
+        if (!_validateSignature(ownerIndex, crossChainHash, signatureData)) {
+            revert Unauthorized();
+        }
+
+        FrameTxLib.approveEmpty(scope);
     }
 
-    /// @notice Execute with graceful error handling
-    /// @param target The address to call
-    /// @param value The value to send
-    /// @param data The calldata
-    /// @return success Whether the call succeeded
-    /// @return returnData The return data
-    function executeTry(address target, uint256 value, bytes calldata data)
+    // ── Execution (SENDER Frame) ──────────────────────────────────────
+
+    /// @notice Execute a single call.
+    function execute(address target, uint256 value, bytes calldata data)
         external
         payable
-        onlyInSenderFrame
-        returns (bool success, bytes memory returnData)
+        onlySenderFrameOrOwner
     {
-        (success, returnData) = target.call{value: value}(data);
-        emit Executed(target, value, data);
+        _call(target, value, data);
     }
 
-    /// @notice Add a new owner
-    /// @param owner Owner bytes (32 for address, 64 for WebAuthn)
-    function addOwner(bytes calldata owner) external onlyInSenderFrame {
-        if (_owners.isOwner[owner]) revert AlreadyOwner(owner);
+    /// @notice Execute multiple calls.
+    function executeBatch(Call[] calldata calls) external payable onlySenderFrameOrOwner {
+        for (uint256 i; i < calls.length; i++) {
+            _call(calls[i].target, calls[i].value, calls[i].data);
+        }
+    }
 
-        // Validate owner format
-        if (owner.length == 32) {
-            // Ethereum address
-            if (uint256(bytes32(owner)) > type(uint160).max) {
-                revert InvalidEthereumAddressOwner(owner);
+    /// @notice Execute cross-chain replayable calls.
+    /// @dev Only allows selectors permitted by canSkipChainIdValidation.
+    function executeWithoutChainIdValidation(bytes[] calldata calls) external payable {
+        if (msg.sender != address(this)) revert Unauthorized();
+
+        for (uint256 i; i < calls.length; i++) {
+            bytes calldata call_ = calls[i];
+            bytes4 selector = bytes4(call_);
+            if (!canSkipChainIdValidation(selector)) {
+                revert SelectorNotAllowed(selector);
             }
-        } else if (owner.length == 64) {
-            // WebAuthn public key (x, y)
-            // No additional validation needed
-        } else {
-            revert InvalidOwnerBytesLength(owner);
+
+            // Validate implementation code for upgrade calls
+            if (selector == UUPSUpgradeable.upgradeToAndCall.selector) {
+                address newImpl;
+                assembly {
+                    // Skip 4 bytes selector to read first argument
+                    newImpl := calldataload(add(call_.offset, 4))
+                }
+                if (newImpl.code.length == 0) revert InvalidImplementation(newImpl);
+            }
+
+            _call(address(this), 0, call_);
         }
-
-        uint256 index = _owners.nextOwnerIndex++;
-        _owners.ownerAtIndex[index] = owner;
-        _owners.isOwner[owner] = true;
-
-        emit OwnerAdded(index, owner);
     }
 
-    /// @notice Add an Ethereum address as owner
-    /// @param owner The address to add
-    function addOwnerAddress(address owner) external onlyInSenderFrame {
+    /// @notice Returns whether a selector can be used with executeWithoutChainIdValidation.
+    function canSkipChainIdValidation(bytes4 functionSelector) public pure returns (bool) {
+        if (
+            functionSelector == this.addOwnerAddress.selector
+                || functionSelector == this.addOwnerPublicKey.selector
+                || functionSelector == this.removeOwnerAtIndex.selector
+                || functionSelector == this.removeLastOwner.selector
+                || functionSelector == UUPSUpgradeable.upgradeToAndCall.selector
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+    // ── ERC-1271 ──────────────────────────────────────────────────────
+
+    /// @notice Validates the signature against the given hash with anti cross-account replay.
+    function isValidSignature(bytes32 hash, bytes calldata signature) public view returns (bytes4) {
+        if (_isValidSignature(replaySafeHash(hash), signature)) {
+            return ERC1271_MAGICVALUE;
+        }
+        return ERC1271_INVALID;
+    }
+
+    /// @notice Returns the replay-safe hash for anti cross-account replay.
+    function replaySafeHash(bytes32 hash) public view returns (bytes32) {
+        return keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                domainSeparator(),
+                keccak256(abi.encode(_MESSAGE_TYPEHASH, hash))
+            )
+        );
+    }
+
+    /// @notice Returns the EIP-712 domain separator.
+    function domainSeparator() public view returns (bytes32) {
+        (string memory name, string memory version) = _domainNameAndVersion();
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes(name)),
+                keccak256(bytes(version)),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    /// @notice Returns EIP-712 domain info (ERC-5267).
+    function eip712Domain()
+        external
+        view
+        returns (
+            bytes1 fields,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,
+            bytes32 salt,
+            uint256[] memory extensions
+        )
+    {
+        fields = hex"0f";
+        (name, version) = _domainNameAndVersion();
+        chainId = block.chainid;
+        verifyingContract = address(this);
+        salt = salt;
+        extensions = extensions;
+    }
+
+    // ── Owner Management ──────────────────────────────────────────────
+
+    /// @notice Add an Ethereum address as owner.
+    function addOwnerAddress(address owner) external onlySenderFrameOrOwner {
         if (owner == address(0)) revert InvalidOwner();
-        bytes memory ownerBytes = abi.encode(owner);
-
-        if (_owners.isOwner[ownerBytes]) revert AlreadyOwner(ownerBytes);
-
-        uint256 index = _owners.nextOwnerIndex++;
-        _owners.ownerAtIndex[index] = ownerBytes;
-        _owners.isOwner[ownerBytes] = true;
-
-        emit OwnerAdded(index, ownerBytes);
+        _addOwner(abi.encode(owner));
     }
 
-    /// @notice Add a WebAuthn public key as owner
-    /// @param x The x coordinate
-    /// @param y The y coordinate
-    function addOwnerPublicKey(uint256 x, uint256 y) external onlyInSenderFrame {
-        bytes memory ownerBytes = abi.encode(x, y);
-
-        if (_owners.isOwner[ownerBytes]) revert AlreadyOwner(ownerBytes);
-
-        uint256 index = _owners.nextOwnerIndex++;
-        _owners.ownerAtIndex[index] = ownerBytes;
-        _owners.isOwner[ownerBytes] = true;
-
-        emit OwnerAdded(index, ownerBytes);
+    /// @notice Add a WebAuthn public key as owner.
+    function addOwnerPublicKey(bytes32 x, bytes32 y) external onlySenderFrameOrOwner {
+        _addOwner(abi.encode(x, y));
     }
 
-    /// @notice Remove an owner at index
-    /// @param index The owner index to remove
-    function removeOwnerAtIndex(uint256 index) external onlyInSenderFrame {
-        bytes memory owner = _owners.ownerAtIndex[index];
+    /// @notice Remove an owner at index.
+    /// @param index The index of the owner to remove.
+    /// @param owner The ABI encoded bytes of the owner to remove (for verification).
+    function removeOwnerAtIndex(uint256 index, bytes calldata owner) external onlySenderFrameOrOwner {
+        if (ownerCount() == 1) revert LastOwner();
+        _removeOwnerAtIndex(index, owner);
+    }
 
-        if (owner.length == 0) revert NoOwnerAtIndex(index);
+    /// @notice Remove the last owner (when only one remains).
+    /// @param index The index of the owner to remove.
+    /// @param owner The ABI encoded bytes of the owner to remove (for verification).
+    function removeLastOwner(uint256 index, bytes calldata owner) external onlySenderFrameOrOwner {
+        uint256 ownersRemaining = ownerCount();
+        if (ownersRemaining > 1) revert NotLastOwner(ownersRemaining);
+        _removeOwnerAtIndex(index, owner);
+    }
 
-        // Prevent removing last owner
-        if (_owners.nextOwnerIndex - _owners.removedOwnersCount == 1) {
-            revert LastOwner();
+    // ── Owner Queries ─────────────────────────────────────────────────
+
+    /// @notice Check if address is an owner.
+    function isOwnerAddress(address owner) public view returns (bool) {
+        return _getOwnerStorage().isOwner[abi.encode(owner)];
+    }
+
+    /// @notice Check if public key is an owner.
+    function isOwnerPublicKey(bytes32 x, bytes32 y) public view returns (bool) {
+        return _getOwnerStorage().isOwner[abi.encode(x, y)];
+    }
+
+    /// @notice Check if bytes is an owner.
+    function isOwnerBytes(bytes memory owner) public view returns (bool) {
+        return _getOwnerStorage().isOwner[owner];
+    }
+
+    /// @notice Get owner at index.
+    function ownerAtIndex(uint256 index) public view returns (bytes memory) {
+        return _getOwnerStorage().ownerAtIndex[index];
+    }
+
+    /// @notice Get next owner index.
+    function nextOwnerIndex() public view returns (uint256) {
+        return _getOwnerStorage().nextOwnerIndex;
+    }
+
+    /// @notice Get current number of owners.
+    function ownerCount() public view returns (uint256) {
+        OwnerStorage storage $ = _getOwnerStorage();
+        return $.nextOwnerIndex - $.removedOwnersCount;
+    }
+
+    /// @notice Get number of removed owners.
+    function removedOwnersCount() public view returns (uint256) {
+        return _getOwnerStorage().removedOwnersCount;
+    }
+
+    // ── Proxy ─────────────────────────────────────────────────────────
+
+    /// @notice Returns the implementation address of the ERC-1967 proxy.
+    function implementation() public view returns (address $) {
+        assembly {
+            $ := sload(_ERC1967_IMPLEMENTATION_SLOT)
         }
-
-        delete _owners.isOwner[owner];
-        delete _owners.ownerAtIndex[index];
-        _owners.removedOwnersCount++;
-
-        emit OwnerRemoved(index, owner);
     }
 
-    /// @notice Remove the last owner
-    function removeLastOwner() external onlyInSenderFrame {
-        if (_owners.nextOwnerIndex == 0) revert LastOwner();
+    // ── Internal: Storage ─────────────────────────────────────────────
 
-        uint256 lastIndex = _owners.nextOwnerIndex - 1;
-        bytes memory owner = _owners.ownerAtIndex[lastIndex];
-
-        if (owner.length == 0) revert NoOwnerAtIndex(lastIndex);
-
-        // Prevent removing last owner
-        if (_owners.nextOwnerIndex - _owners.removedOwnersCount == 1) {
-            revert LastOwner();
+    function _getOwnerStorage() internal pure returns (OwnerStorage storage $) {
+        assembly ("memory-safe") {
+            $.slot := _OWNER_STORAGE_SLOT
         }
-
-        delete _owners.isOwner[owner];
-        delete _owners.ownerAtIndex[lastIndex];
-        _owners.nextOwnerIndex--;
-
-        emit OwnerRemoved(lastIndex, owner);
     }
 
-    /// @notice Check if bytes is an owner
-    function isOwnerBytes(bytes memory owner) external view returns (bool) {
-        return _owners.isOwner[owner];
-    }
+    // ── Internal: Initialization ──────────────────────────────────────
 
-    /// @notice Check if address is an owner
-    function isOwnerAddress(address owner) external view returns (bool) {
-        return _owners.isOwner[abi.encode(owner)];
-    }
-
-    /// @notice Check if public key is an owner
-    function isOwnerPublicKey(uint256 x, uint256 y) external view returns (bool) {
-        return _owners.isOwner[abi.encode(x, y)];
-    }
-
-    /// @notice Get owner at index
-    function ownerAtIndex(uint256 index) external view returns (bytes memory) {
-        return _owners.ownerAtIndex[index];
-    }
-
-    /// @notice Get next owner index
-    function nextOwnerIndex() external view returns (uint256) {
-        return _owners.nextOwnerIndex;
-    }
-
-    /// @notice Receive ETH
-    receive() external payable {}
-
-    /// @dev Initialize owners during construction
     function _initializeOwners(bytes[] memory owners) internal {
-        for (uint256 i = 0; i < owners.length; i++) {
+        OwnerStorage storage $ = _getOwnerStorage();
+        for (uint256 i; i < owners.length; i++) {
             bytes memory owner = owners[i];
 
-            // Validate owner format
             if (owner.length == 32) {
                 if (uint256(bytes32(owner)) > type(uint160).max) {
                     revert InvalidEthereumAddressOwner(owner);
@@ -260,40 +363,77 @@ contract CoinbaseSmartWallet8141 {
                 revert InvalidOwnerBytesLength(owner);
             }
 
-            _owners.ownerAtIndex[i] = owner;
-            _owners.isOwner[owner] = true;
-            emit OwnerAdded(i, owner);
+            $.ownerAtIndex[i] = owner;
+            $.isOwner[owner] = true;
+            emit AddOwner(i, owner);
         }
-
-        _owners.nextOwnerIndex = owners.length;
+        $.nextOwnerIndex = owners.length;
     }
 
-    /// @dev Validate signature for an owner
-    function _validateSignature(uint256 ownerIndex, bytes32 sigHash, bytes memory signatureData)
+    // ── Internal: Owner Management ────────────────────────────────────
+
+    function _addOwner(bytes memory owner) internal {
+        OwnerStorage storage $ = _getOwnerStorage();
+        if ($.isOwner[owner]) revert AlreadyOwner(owner);
+
+        uint256 index = $.nextOwnerIndex++;
+        $.ownerAtIndex[index] = owner;
+        $.isOwner[owner] = true;
+        emit AddOwner(index, owner);
+    }
+
+    function _removeOwnerAtIndex(uint256 index, bytes calldata owner) internal {
+        OwnerStorage storage $ = _getOwnerStorage();
+        bytes memory owner_ = $.ownerAtIndex[index];
+        if (owner_.length == 0) revert NoOwnerAtIndex(index);
+        if (keccak256(owner_) != keccak256(owner)) {
+            revert WrongOwnerAtIndex(index, owner, owner_);
+        }
+        delete $.isOwner[owner];
+        delete $.ownerAtIndex[index];
+        $.removedOwnersCount++;
+        emit RemoveOwner(index, owner);
+    }
+
+    // ── Internal: Access Control ──────────────────────────────────────
+
+    function _checkOwner() internal view {
+        if (isOwnerAddress(msg.sender) || msg.sender == address(this)) {
+            return;
+        }
+        revert Unauthorized();
+    }
+
+    // ── Internal: Signature Validation ────────────────────────────────
+
+    function _isValidSignature(bytes32 hash, bytes calldata signature) internal view returns (bool) {
+        (uint256 ownerIndex, bytes memory signatureData) = abi.decode(signature, (uint256, bytes));
+        return _validateSignature(ownerIndex, hash, signatureData);
+    }
+
+    function _validateSignature(uint256 ownerIndex, bytes32 hash, bytes memory signatureData)
         internal
         view
         returns (bool)
     {
-        bytes memory ownerBytes = _owners.ownerAtIndex[ownerIndex];
+        OwnerStorage storage $ = _getOwnerStorage();
+        bytes memory ownerBytes = $.ownerAtIndex[ownerIndex];
 
         if (ownerBytes.length == 0) return false;
-        if (!_owners.isOwner[ownerBytes]) return false;
+        if (!$.isOwner[ownerBytes]) return false;
 
-        // Ethereum address owner (32 bytes)
         if (ownerBytes.length == 32) {
-            return _validateEthereumSignature(ownerBytes, sigHash, signatureData);
+            return _validateEthereumSignature(ownerBytes, hash, signatureData);
         }
 
-        // WebAuthn public key owner (64 bytes)
         if (ownerBytes.length == 64) {
-            return _validateWebAuthnSignature(ownerBytes, sigHash, signatureData);
+            return _validateWebAuthnSignature(ownerBytes, hash, signatureData);
         }
 
         return false;
     }
 
-    /// @dev Validate ECDSA signature for Ethereum address
-    function _validateEthereumSignature(bytes memory ownerBytes, bytes32 sigHash, bytes memory signatureData)
+    function _validateEthereumSignature(bytes memory ownerBytes, bytes32 hash, bytes memory signatureData)
         internal
         pure
         returns (bool)
@@ -301,7 +441,6 @@ contract CoinbaseSmartWallet8141 {
         if (signatureData.length != 65) return false;
 
         address owner = address(uint160(uint256(bytes32(ownerBytes))));
-
         bytes32 r;
         bytes32 s;
         uint8 v;
@@ -310,20 +449,17 @@ contract CoinbaseSmartWallet8141 {
             s := mload(add(signatureData, 64))
             v := byte(0, mload(add(signatureData, 96)))
         }
-
         if (v < 27) v += 27;
 
-        address signer = ecrecover(sigHash, v, r, s);
+        address signer = ecrecover(hash, v, r, s);
         return signer == owner && signer != address(0);
     }
 
-    /// @dev Validate WebAuthn signature using P256 verification
-    function _validateWebAuthnSignature(bytes memory ownerBytes, bytes32 sigHash, bytes memory signatureData)
+    function _validateWebAuthnSignature(bytes memory ownerBytes, bytes32 hash, bytes memory signatureData)
         internal
         view
         returns (bool)
     {
-        // Extract public key coordinates from owner bytes (64 bytes = x + y)
         uint256 x;
         uint256 y;
         assembly {
@@ -331,8 +467,6 @@ contract CoinbaseSmartWallet8141 {
             y := mload(add(ownerBytes, 64))
         }
 
-        // Decode WebAuthn authentication data from signature
-        // Use tuple decode instead of struct decode to avoid compiler struct decode issue
         (
             bytes memory authenticatorData,
             bytes memory clientDataJSON,
@@ -345,19 +479,11 @@ contract CoinbaseSmartWallet8141 {
             authenticatorData, clientDataJSON, challengeIndex, typeIndex, rVal, sVal
         );
 
-        // Verify WebAuthn signature
-        // Challenge is the sigHash (32 bytes)
-        // requireUV = true for security (User Verification flag must be set)
-        return WebAuthn.verify(
-            abi.encodePacked(sigHash),
-            true, // requireUV
-            webAuthnAuth,
-            x,
-            y
-        );
+        return WebAuthn.verify(abi.encodePacked(hash), true, webAuthnAuth, x, y);
     }
 
-    /// @dev Execute a call
+    // ── Internal: Execution ───────────────────────────────────────────
+
     function _call(address target, uint256 value, bytes memory data) internal {
         (bool success, bytes memory result) = target.call{value: value}(data);
         if (!success) {
@@ -367,8 +493,26 @@ contract CoinbaseSmartWallet8141 {
         }
     }
 
-    /// @dev Check if msg.sender is an owner
-    function _isOwner(address sender) internal view returns (bool) {
-        return _owners.isOwner[abi.encode(sender)];
+    // ── Internal: Frame TX Helpers ────────────────────────────────────
+
+    function _findSenderFrameIndex() internal pure returns (uint256 idx) {
+        uint256 count = FrameTxLib.frameCount();
+        uint256 current = FrameTxLib.currentFrameIndex();
+        for (idx = current + 1; idx < count; idx++) {
+            if (FrameTxLib.frameMode(idx) == FRAME_MODE_SENDER) {
+                return idx;
+            }
+        }
+        revert InvalidFrameMode();
     }
+
+    // ── Internal: EIP-712 ─────────────────────────────────────────────
+
+    function _domainNameAndVersion() internal pure returns (string memory, string memory) {
+        return ("Coinbase Smart Wallet", "1");
+    }
+
+    // ── UUPS ──────────────────────────────────────────────────────────
+
+    function _authorizeUpgrade(address) internal view override onlyOwner {}
 }
