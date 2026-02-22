@@ -101,6 +101,7 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
         if (_getOwnerStorage().nextOwnerIndex != 0) {
             revert Initialized();
         }
+        _validateOwners(owners);
         _initializeOwners(owners);
     }
 
@@ -353,6 +354,16 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
 
     // ── Internal: Initialization ──────────────────────────────────────
 
+    /// @dev Validates that no owner is address(0). Called from initialize() only —
+    ///      the constructor intentionally uses address(0) as a sentinel.
+    function _validateOwners(bytes[] calldata owners) internal pure {
+        for (uint256 i; i < owners.length; i++) {
+            if (owners[i].length == 32) {
+                if (uint256(bytes32(owners[i])) == 0) revert InvalidOwner();
+            }
+        }
+    }
+
     function _initializeOwners(bytes[] memory owners) internal {
         OwnerStorage storage $ = _getOwnerStorage();
         for (uint256 i; i < owners.length; i++) {
@@ -363,9 +374,8 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
                 if (addr > type(uint160).max) {
                     revert InvalidEthereumAddressOwner(owner);
                 }
-                if (addr == 0) revert InvalidOwner();
             } else if (owner.length == 64) {
-                // WebAuthn public key — no zero check needed (valid curve point)
+                // WebAuthn public key
             } else {
                 revert InvalidOwnerBytesLength(owner);
             }
