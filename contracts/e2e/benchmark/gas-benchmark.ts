@@ -487,21 +487,6 @@ async function main() {
     walletClient, publicClient, tokenBytecode, 3_000_000n, "BenchmarkToken"
   );
 
-  // ── Warm up recipient addresses ──
-  // Pre-fund with 1 wei ETH (avoid G_newaccount) and 1 token (avoid zero→non-zero SSTORE)
-  sectionHeader("🔥 Warm up recipients");
-  const deadAddrs = [DEAD_SIMPLE, DEAD_KERNEL, DEAD_COINBASE, DEAD_LIGHT];
-  for (const addr of deadAddrs) {
-    await fundAccount(walletClient, publicClient, addr, "0.000000000000000001");
-    const mintDead = encodeFunctionData({
-      abi: benchmarkTokenAbi,
-      functionName: "mint",
-      args: [addr, 1n],
-    });
-    await sendTx(tokenAddr, mintDead);
-  }
-  success("All recipients warmed up");
-
   // ── Build common calldata ──
   const ethTransferCalldata = (target: Address) =>
     encodeFunctionData({
