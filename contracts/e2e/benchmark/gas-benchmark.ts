@@ -34,10 +34,10 @@ import {
 } from "../helpers/config.js";
 
 // Per-account recipient addresses to avoid SSTORE zero→non-zero bias
-const DEAD_SIMPLE   = "0x000000000000000000000000000000000000dEa1" as Address;
+const DEAD_SIMPLE   = "0x000000000000000000000000000000000000deA1" as Address;
 const DEAD_KERNEL   = "0x000000000000000000000000000000000000dEa2" as Address;
-const DEAD_COINBASE = "0x000000000000000000000000000000000000dEa3" as Address;
-const DEAD_LIGHT    = "0x000000000000000000000000000000000000dEa4" as Address;
+const DEAD_COINBASE = "0x000000000000000000000000000000000000DEA3" as Address;
+const DEAD_LIGHT    = "0x000000000000000000000000000000000000DeA4" as Address;
 import { createTestClients, waitForReceipt, fundAccount } from "../helpers/client.js";
 import { loadBytecode, deployContract } from "../helpers/deploy.js";
 import { computeSigHash, encodeFrameTx, type FrameTxParams } from "../helpers/frame-tx.js";
