@@ -356,10 +356,14 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
             bytes memory owner = owners[i];
 
             if (owner.length == 32) {
-                if (uint256(bytes32(owner)) > type(uint160).max) {
+                uint256 addr = uint256(bytes32(owner));
+                if (addr > type(uint160).max) {
                     revert InvalidEthereumAddressOwner(owner);
                 }
-            } else if (owner.length != 64) {
+                if (addr == 0) revert InvalidOwner();
+            } else if (owner.length == 64) {
+                // WebAuthn public key — no zero check needed (valid curve point)
+            } else {
                 revert InvalidOwnerBytesLength(owner);
             }
 
