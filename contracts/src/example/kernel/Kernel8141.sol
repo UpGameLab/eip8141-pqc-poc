@@ -101,6 +101,13 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     error InvalidSelector();
     error InitConfigError(uint256 idx);
     error AlreadyInitialized();
+    error SenderFrameNotFound();
+    error RequiredHookFrameMissing();
+    error NoPriorVerifyApproval();
+    error EnableInstallFrameNotFound();
+    error SignatureTooShort();
+    error InvalidFrameMode();
+    error VerifyDidNotApprove();
 
     event Received(address sender, uint256 amount);
     event Upgraded(address indexed implementation);
@@ -226,7 +233,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
 
         // Decode ValidationId from signature prefix
         // sig format: [1B type][20B validator addr][actual sig]
-        require(sig.length >= 21, "Sig too short");
+        if (sig.length < 21) revert SignatureTooShort();
         ValidationId vId;
         bytes calldata actualSig;
         assembly {
@@ -279,7 +286,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         uint256 senderFrameIdx = _findSenderFrameIndex();
 
         // Decode ValidationId from first 21 bytes of sig
-        require(sig.length >= 21, "Sig too short");
+        if (sig.length < 21) revert SignatureTooShort();
         ValidationId vId;
         bytes calldata actualSig;
         assembly {
@@ -321,7 +328,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     /// @dev Performs the actual sstore operations that VERIFY cannot do.
     ///      Must be called after a VERIFY frame has approved this account.
     function enableInstall(bytes calldata enableData, ValidationId vId) external {
-        require(FrameTxLib.currentFrameMode() == FRAME_MODE_DEFAULT, "Not DEFAULT frame");
+        if (FrameTxLib.currentFrameMode() != FRAME_MODE_DEFAULT) revert InvalidFrameMode();
         _requirePriorVerifyApproval();
 
         // enableData format: [20B hook address][EnableDataFormat...]
@@ -338,7 +345,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
 
         // Decode PermissionId from signature
         // sig format: [0x02][4B permissionId][actual sig]
-        require(sig.length >= 5, "Sig too short");
+        if (sig.length < 5) revert SignatureTooShort();
         ValidationId vId;
         bytes calldata actualSig;
         assembly {
@@ -679,7 +686,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
 
     /// @dev Ensure we're executing in a VERIFY frame.
     function _requireVerifyFrame() internal pure {
-        require(FrameTxLib.currentFrameMode() == FRAME_MODE_VERIFY, "Not VERIFY frame");
+        if (FrameTxLib.currentFrameMode() != FRAME_MODE_VERIFY) revert InvalidFrameMode();
     }
 
     /// @dev Find the first SENDER frame targeting this account after the current VERIFY frame.
@@ -695,7 +702,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
                 return idx;
             }
         }
-        revert("No SENDER frame found");
+        revert SenderFrameNotFound();
     }
 
     /// @dev Verify that required hook DEFAULT frames are present in the transaction.
@@ -721,7 +728,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
                 return; // Hook frame found
             }
         }
-        revert("Required hook frame missing");
+        revert RequiredHookFrameMissing();
     }
 
     /// @dev Verify that a prior VERIFY frame for this account approved the transaction.
@@ -734,11 +741,11 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
                     && FrameTxLib.frameTarget(i) == address(this)
             ) {
                 uint8 status = FrameTxLib.frameStatus(i);
-                require(status >= 2, "VERIFY did not approve"); // APPROVED_EXECUTION+
+                if (status < 2) revert VerifyDidNotApprove(); // APPROVED_EXECUTION+
                 return;
             }
         }
-        revert("No prior VERIFY approval");
+        revert NoPriorVerifyApproval();
     }
 
     /// @dev Verify that an enableInstall DEFAULT frame exists between VERIFY and SENDER.
@@ -752,6 +759,6 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
                 return; // enableInstall DEFAULT frame found
             }
         }
-        revert("No enableInstall frame found");
+        revert EnableInstallFrameNotFound();
     }
 }
