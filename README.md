@@ -11,18 +11,22 @@ A reference implementation for [EIP-8141](https://github.com/ethereum/EIPs/pull/
 ├── 8141-geth/             # Modified go-ethereum with frame transaction support
 ├── solidity-eip8141/      # Modified solc with EIP-8141 opcodes (APPROVE, TXPARAMLOAD, ...)
 ├── contracts/             # Solidity smart contracts (Foundry)
-│   ├── src/               # Contract sources
+│   ├── src/
 │   │   ├── FrameTxLib.sol            # Library wrapping EIP-8141 opcodes
 │   │   ├── Simple8141Account.sol     # Minimal single-owner smart account
 │   │   ├── SimplePaymaster.sol       # Gas sponsorship paymaster
-│   │   └── example/                  # Modular account examples
-│   │       ├── Kernel8141.sol                # Kernel-style modular account
-│   │       ├── CoinbaseSmartWallet8141.sol   # Coinbase-style smart wallet
-│   │       ├── LightAccount8141.sol         # Alchemy LightAccount port
-│   │       ├── validators/                   # ECDSA, SessionKey validators
-│   │       ├── executors/                    # Default, Batch executors
-│   │       ├── hooks/                        # SpendingLimit, SessionKeyPermission hooks
-│   │       └── handlers/                     # ERC-1271 fallback handler
+│   │   ├── ERC20Paymaster.sol        # ERC20 token paymaster
+│   │   └── example/
+│   │       ├── kernel/                       # Kernel v3-style modular account
+│   │       │   ├── Kernel8141.sol
+│   │       │   ├── validators/               # ECDSA, SessionKey validators
+│   │       │   ├── executors/                # Default, Batch executors
+│   │       │   ├── hooks/                    # SpendingLimit, SessionKeyPermission hooks
+│   │       │   └── handlers/                 # ERC-1271 fallback handler
+│   │       ├── coinbase-smart-wallet/        # Coinbase-style smart wallet
+│   │       │   └── CoinbaseSmartWallet8141.sol
+│   │       └── light-account/                # Alchemy LightAccount port
+│   │           └── LightAccount8141.sol
 │   ├── test/              # Forge unit tests
 │   └── e2e/               # TypeScript E2E tests (viem)
 ├── devnet/                # Dev network launch script
