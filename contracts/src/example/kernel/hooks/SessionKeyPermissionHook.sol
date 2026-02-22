@@ -11,9 +11,14 @@ import {MODULE_TYPE_HOOK} from "../types/Constants8141.sol";
 contract SessionKeyPermissionHook is IHook8141 {
     SessionKeyValidator public immutable sessionKeyValidator;
 
+    /// @dev Self-contained spending tracking: spentAmounts[account][sessionKey] = total spent
+    mapping(address => mapping(address => uint256)) public spentAmounts;
+
     error SpendingLimitExceeded(uint256 requested, uint256 available);
     error SelectorNotAllowed(bytes4 selector);
     error TargetNotAllowed(address target);
+
+    event SessionSpent(address indexed account, address indexed sessionKey, uint256 amount);
 
     constructor(SessionKeyValidator _validator) {
         sessionKeyValidator = _validator;
@@ -42,13 +47,15 @@ contract SessionKeyPermissionHook is IHook8141 {
         SessionKeyValidator.SessionPermissions memory perms =
             sessionKeyValidator.getPermissions(account, sessionKeyAddr);
 
-        // 1. Check spending limit
+        // 1. Check spending limit (self-contained tracking)
         if (msgValue > 0) {
-            uint256 available = perms.spendingLimit - perms.spentAmount;
+            uint256 spent = spentAmounts[account][sessionKeyAddr];
+            uint256 available = perms.spendingLimit - spent;
             if (msgValue > available) {
                 revert SpendingLimitExceeded(msgValue, available);
             }
-            sessionKeyValidator.recordSpending(account, sessionKeyAddr, msgValue);
+            spentAmounts[account][sessionKeyAddr] = spent + msgValue;
+            emit SessionSpent(account, sessionKeyAddr, msgValue);
         }
 
         // 2. Check selector whitelist

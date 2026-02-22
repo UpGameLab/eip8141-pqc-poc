@@ -143,11 +143,6 @@ contract SessionKeyValidator is IValidator8141 {
         emit SessionKeyRevoked(account, sessionKey);
     }
 
-    function recordSpending(address account, address sessionKey, uint256 amount) external {
-        sessionPermissions[account][sessionKey].spentAmount += amount;
-        emit SessionSpent(account, sessionKey, amount);
-    }
-
     function getActiveSessions(address account) external view returns (address[] memory) {
         return _activeSessions[account];
     }
