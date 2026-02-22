@@ -68,9 +68,14 @@ import {
 ///
 ///   Frame transaction patterns:
 ///
-///     Simple Transaction (root validator):
-///       Frame 0: VERIFY(kernel)  → kernel.validate(sig, scope=2)          → APPROVE(both)
+///     Simple Transaction (root validator, no hook):
+///       Frame 0: VERIFY(kernel)  → kernel.validate(sig, scope=2)          → APPROVE
 ///       Frame 1: SENDER(kernel)  → kernel.execute(mode, data)
+///
+///     Root Validator + Hook:
+///       Frame 0: DEFAULT(hook)   → hook.check()                           → pre-check in own frame
+///       Frame 1: VERIFY(kernel)  → kernel.validate(sig, scope)            → verifies frameStatus(0)==SUCCESS
+///       Frame 2: SENDER(kernel)  → kernel.execute(mode, data)
 ///
 ///     Non-Root Validator (sigHash-bound):
 ///       Frame 0: VERIFY(kernel)  → kernel.validateFromSenderFrame(sig, scope)
@@ -78,7 +83,8 @@ import {
 ///
 ///     Enable Mode (install + validate in one tx):
 ///       Frame 0: VERIFY(kernel)  → kernel.validateWithEnable(enableData, sig, scope)
-///       Frame 1: SENDER(kernel)  → kernel.execute(mode, data)
+///       Frame 1: DEFAULT(kernel) → kernel.enableInstall(...)              → sstore in DEFAULT frame
+///       Frame 2: SENDER(kernel)  → kernel.execute(mode, data)
 ///
 ///     Permission-Based:
 ///       Frame 0: VERIFY(kernel)  → kernel.validatePermission(sig, scope)
@@ -194,6 +200,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     // ── VERIFY frame: Validation ────────────────────────────────────────
 
     /// @notice Root validator validation. Called during VERIFY frame.
+    /// @dev Verifies signature, then checks that required hook DEFAULT frames are present.
     function validate(bytes calldata sig, uint8 scope) external {
         _requireVerifyFrame();
         ValidationStorage storage vs = _validationStorage();
@@ -202,6 +209,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         bytes32 sigHash = FrameTxLib.sigHash();
         uint256 senderFrameIdx = _findSenderFrameIndex();
         _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, sig);
+        _verifyHookFrames(vId);
         FrameTxLib.approveEmpty(scope);
     }
 
@@ -246,6 +254,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         }
 
         _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+        _verifyHookFrames(vId);
 
         FrameTxLib.approveEmpty(scope);
     }
@@ -317,6 +326,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         }
 
         _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+        _verifyHookFrames(vId);
 
         FrameTxLib.approveEmpty(scope);
     }
@@ -633,16 +643,65 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         require(FrameTxLib.currentFrameMode() == FRAME_MODE_VERIFY, "Not VERIFY frame");
     }
 
-    /// @dev Find the first SENDER frame index after the current VERIFY frame.
+    /// @dev Find the first SENDER frame targeting this account after the current VERIFY frame.
     /// @return idx The SENDER frame index
-    function _findSenderFrameIndex() internal pure returns (uint256 idx) {
+    function _findSenderFrameIndex() internal view returns (uint256 idx) {
         uint256 count = FrameTxLib.frameCount();
         uint256 current = FrameTxLib.currentFrameIndex();
         for (idx = current + 1; idx < count; idx++) {
-            if (FrameTxLib.frameMode(idx) == FRAME_MODE_SENDER) {
+            if (
+                FrameTxLib.frameMode(idx) == FRAME_MODE_SENDER
+                    && FrameTxLib.frameTarget(idx) == address(this)
+            ) {
                 return idx;
             }
         }
         revert("No SENDER frame found");
+    }
+
+    /// @dev Verify that required hook DEFAULT frames are present in the transaction.
+    ///      If a validator has a hook configured (not sentinel), a DEFAULT frame targeting
+    ///      that hook must exist before the SENDER frame. If the hook frame already executed
+    ///      (before current VERIFY), its status must be SUCCESS (1).
+    function _verifyHookFrames(ValidationId vId) internal view {
+        IHook8141 hook = _validationStorage().validationConfig[vId].hook;
+
+        // Sentinel values: no hook required
+        if (address(hook) == HOOK_INSTALLED || address(hook) == HOOK_NOT_INSTALLED) return;
+
+        uint256 current = FrameTxLib.currentFrameIndex();
+        uint256 count = FrameTxLib.frameCount();
+
+        for (uint256 i = 0; i < count; i++) {
+            if (i == current) continue; // Skip current VERIFY frame
+            if (
+                FrameTxLib.frameMode(i) == FRAME_MODE_DEFAULT
+                    && FrameTxLib.frameTarget(i) == address(hook)
+            ) {
+                // If hook frame already executed (before VERIFY), check it succeeded
+                if (i < current) {
+                    require(FrameTxLib.frameStatus(i) == 1, "Hook frame failed");
+                }
+                return; // Hook frame found
+            }
+        }
+        revert("Required hook frame missing");
+    }
+
+    /// @dev Verify that a prior VERIFY frame for this account approved the transaction.
+    ///      Used by DEFAULT frame functions (e.g., enableInstall) to ensure authorization.
+    function _requirePriorVerifyApproval() internal view {
+        uint256 current = FrameTxLib.currentFrameIndex();
+        for (uint256 i = 0; i < current; i++) {
+            if (
+                FrameTxLib.frameMode(i) == FRAME_MODE_VERIFY
+                    && FrameTxLib.frameTarget(i) == address(this)
+            ) {
+                uint8 status = FrameTxLib.frameStatus(i);
+                require(status >= 2, "VERIFY did not approve"); // APPROVED_EXECUTION+
+                return;
+            }
+        }
+        revert("No prior VERIFY approval");
     }
 }
