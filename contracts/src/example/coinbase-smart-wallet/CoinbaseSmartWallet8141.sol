@@ -21,6 +21,9 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
     // ── ERC-1271 ──────────────────────────────────────────────────────
     bytes4 internal constant ERC1271_MAGICVALUE = 0x1626ba7e;
     bytes4 internal constant ERC1271_INVALID = 0xffffffff;
+
+    /// @dev Half of secp256k1 curve order, for EIP-2 signature malleability check.
+    uint256 private constant _HALF_CURVE_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
     bytes32 private constant _MESSAGE_TYPEHASH = keccak256("CoinbaseSmartWalletMessage(bytes32 hash)");
 
     // ── ERC-7201 Namespaced Storage ───────────────────────────────────
@@ -454,6 +457,8 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
             v := byte(0, mload(add(signatureData, 96)))
         }
         if (v < 27) v += 27;
+        // EIP-2: reject malleable signatures
+        if (uint256(s) > _HALF_CURVE_ORDER) return false;
 
         address signer = ecrecover(hash, v, r, s);
         return signer == owner && signer != address(0);

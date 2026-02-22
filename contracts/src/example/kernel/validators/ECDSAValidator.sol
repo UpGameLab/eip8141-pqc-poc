@@ -17,6 +17,9 @@ import {
 ///      - As hook (isModuleType(4)=true): allows owner direct calls when used as rootValidator.
 ///      Storage is keyed by account address (msg.sender during onInstall).
 contract ECDSAValidator is IValidator8141, IHook8141 {
+    /// @dev Half of secp256k1 curve order, for EIP-2 signature malleability check.
+    uint256 private constant _HALF_CURVE_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
+
     struct ECDSAValidatorStorage {
         address owner;
     }
@@ -74,6 +77,8 @@ contract ECDSAValidator is IValidator8141, IHook8141 {
             v := byte(0, calldataload(add(signature.offset, 0x40)))
         }
         if (v < 27) v += 27;
+        // EIP-2: reject malleable signatures (s must be in lower half)
+        if (uint256(s) > _HALF_CURVE_ORDER) return false;
         address recovered = ecrecover(sigHash, v, r, s);
         if (recovered != address(0) && recovered == owner) {
             return true;
@@ -102,6 +107,8 @@ contract ECDSAValidator is IValidator8141, IHook8141 {
             v := byte(0, calldataload(add(sig.offset, 0x40)))
         }
         if (v < 27) v += 27;
+        // EIP-2: reject malleable signatures
+        if (uint256(s) > _HALF_CURVE_ORDER) return ERC1271_INVALID;
         address recovered = ecrecover(hash, v, r, s);
         if (recovered != address(0) && recovered == owner) {
             return ERC1271_MAGICVALUE;

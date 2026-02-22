@@ -11,6 +11,9 @@ import {MODULE_TYPE_VALIDATOR, ERC1271_INVALID} from "../types/Constants8141.sol
 ///      extracted by hooks via getSessionKeyFromSignature() — no transient storage needed,
 ///      since VERIFY frames are read-only (no sstore/tstore allowed).
 contract SessionKeyValidator is IValidator8141 {
+    /// @dev Half of secp256k1 curve order, for EIP-2 signature malleability check.
+    uint256 private constant _HALF_CURVE_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
+
     struct SessionKey {
         address signer;
         uint48 validAfter;
@@ -66,6 +69,8 @@ contract SessionKeyValidator is IValidator8141 {
         bytes32 s = bytes32(sessionSig[32:64]);
         uint8 v = uint8(sessionSig[64]);
         if (v < 27) v += 27;
+        // EIP-2: reject malleable signatures
+        if (uint256(s) > _HALF_CURVE_ORDER) return false;
 
         address signer = ecrecover(sigHash, v, r, s);
         if (signer != session.signer) return false;

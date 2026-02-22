@@ -8,6 +8,9 @@ import {MODULE_TYPE_SIGNER, ERC1271_MAGICVALUE, ERC1271_INVALID} from "../types/
 /// @notice ECDSA signer for the Kernel8141 permission system.
 /// @dev Each (account, permissionId) pair maps to one ECDSA signer address.
 contract ECDSASigner8141 is ISigner8141 {
+    /// @dev Half of secp256k1 curve order, for EIP-2 signature malleability check.
+    uint256 private constant _HALF_CURVE_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
+
     // signers[account][permissionId] = signer address
     mapping(address => mapping(bytes32 => address)) public signers;
 
@@ -36,6 +39,8 @@ contract ECDSASigner8141 is ISigner8141 {
             v := byte(0, calldataload(add(signature.offset, 0x40)))
         }
         if (v < 27) v += 27;
+        // EIP-2: reject malleable signatures
+        if (uint256(s) > _HALF_CURVE_ORDER) return 1;
         address recovered = ecrecover(sigHash, v, r, s);
         if (recovered != address(0) && recovered == expectedSigner) return 0;
 
@@ -65,6 +70,8 @@ contract ECDSASigner8141 is ISigner8141 {
             v := byte(0, calldataload(add(sig.offset, 0x40)))
         }
         if (v < 27) v += 27;
+        // EIP-2: reject malleable signatures
+        if (uint256(s) > _HALF_CURVE_ORDER) return ERC1271_INVALID;
         address recovered = ecrecover(hash, v, r, s);
         if (recovered != address(0) && recovered == expectedSigner) return ERC1271_MAGICVALUE;
 

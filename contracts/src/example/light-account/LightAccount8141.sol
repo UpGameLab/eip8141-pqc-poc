@@ -17,6 +17,9 @@ contract LightAccount8141 is UUPSUpgradeable, Receiver {
     uint8 internal constant FRAME_MODE_VERIFY = 1;
     uint8 internal constant FRAME_MODE_SENDER = 2;
 
+    /// @dev Half of secp256k1 curve order, for EIP-2 signature malleability check.
+    uint256 private constant _HALF_CURVE_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
+
     // ── ERC-1271 ──────────────────────────────────────────────────────
     bytes4 internal constant ERC1271_MAGICVALUE = 0x1626ba7e;
     bytes4 internal constant ERC1271_INVALID = 0xffffffff;
@@ -320,6 +323,8 @@ contract LightAccount8141 is UUPSUpgradeable, Receiver {
             v := byte(0, calldataload(add(signature.offset, 64)))
         }
         if (v < 27) v += 27;
+        // EIP-2: reject malleable signatures
+        if (uint256(s) > _HALF_CURVE_ORDER) return false;
         address recovered = ecrecover(digest, v, r, s);
         return recovered == owner() && recovered != address(0);
     }
