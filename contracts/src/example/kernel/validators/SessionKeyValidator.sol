@@ -7,7 +7,9 @@ import {MODULE_TYPE_VALIDATOR, ERC1271_INVALID} from "../types/Constants8141.sol
 /// @title SessionKeyValidator
 /// @notice Validator for time-bounded, permission-restricted session keys.
 /// @dev Migrated to IValidator8141 (extends IModule8141).
-///      Uses transient storage to pass session key address to hooks.
+///      Session key address is embedded in the signature (first 20 bytes) and can be
+///      extracted by hooks via getSessionKeyFromSignature() — no transient storage needed,
+///      since VERIFY frames are read-only (no sstore/tstore allowed).
 contract SessionKeyValidator is IValidator8141 {
     struct SessionKey {
         address signer;
@@ -68,10 +70,9 @@ contract SessionKeyValidator is IValidator8141 {
         address signer = ecrecover(sigHash, v, r, s);
         if (signer != session.signer) return false;
 
-        // Store session key in transient storage for hook to access
-        assembly {
-            tstore(account, sessionKeyAddr)
-        }
+        // NOTE: No tstore here — VERIFY frames are read-only (no sstore/tstore).
+        // The session key address is already in signature[0:20] and can be extracted
+        // by hooks via getSessionKeyFromSignature() or direct signature parsing.
 
         return true;
     }
@@ -153,5 +154,14 @@ contract SessionKeyValidator is IValidator8141 {
         returns (SessionPermissions memory)
     {
         return sessionPermissions[account][sessionKey];
+    }
+
+    /// @notice Extract session key address from a SessionKeyValidator signature.
+    /// @dev Signature format: [20B sessionKeyAddr][65B ECDSA sig].
+    ///      Hooks can call this to identify which session key was used without
+    ///      relying on transient storage (which is forbidden in VERIFY frames).
+    function getSessionKeyFromSignature(bytes calldata signature) external pure returns (address) {
+        if (signature.length < 20) return address(0);
+        return address(bytes20(signature[0:20]));
     }
 }
