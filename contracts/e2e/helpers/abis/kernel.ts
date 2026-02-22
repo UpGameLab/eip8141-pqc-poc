@@ -55,6 +55,17 @@ export const kernelAbi = [
     outputs: [],
     stateMutability: "nonpayable",
   },
+  // ── DEFAULT frame: Enable mode ──────────────────────────────────
+  {
+    type: "function",
+    name: "enableInstall",
+    inputs: [
+      { name: "enableData", type: "bytes" },
+      { name: "vId", type: "bytes21" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
   // ── SENDER frame: Execution ─────────────────────────────────────
   {
     type: "function",
