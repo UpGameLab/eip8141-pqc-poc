@@ -324,22 +324,13 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     // ── SENDER frame: Execution ─────────────────────────────────────────
 
     /// @notice Execute a transaction. Called in SENDER frame.
-    /// @dev Wraps execution with root validator's hook (derived from storage).
+    /// @dev Hook orchestration removed — hooks execute in separate DEFAULT frames.
+    ///      VERIFY frame verifies hook frame presence via _verifyHookFrames().
     function execute(ExecMode execMode, bytes calldata executionCalldata) external payable override {
         if (msg.sender != address(this)) {
             revert InvalidCaller();
         }
-        // Derive hook from root validator's config (VERIFY frames are read-only)
-        IHook8141 hook = _rootValidatorHook();
-        bytes memory context;
-        bool callHook = address(hook) != HOOK_INSTALLED && address(hook) != HOOK_NOT_INSTALLED;
-        if (callHook) {
-            context = _doPreHook(hook, msg.value, msg.data);
-        }
         ExecLib8141.execute(execMode, executionCalldata);
-        if (callHook) {
-            _doPostHook(hook, context);
-        }
     }
 
     /// @notice Execute from an authorized executor module.
@@ -365,25 +356,16 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     }
 
     /// @notice Wrapper for non-root validator calls. sigHash binds this calldata.
+    /// @dev Hook orchestration removed — hooks execute in separate DEFAULT frames.
     function validatedCall(IValidator8141 validator, bytes calldata data) external payable {
         if (msg.sender != address(this)) {
             revert InvalidCaller();
-        }
-        // Derive hook from the validator parameter (VERIFY frames are read-only)
-        IHook8141 hook = _validatorHook(validator);
-        bytes memory context;
-        bool callHook = address(hook) != HOOK_INSTALLED && address(hook) != HOOK_NOT_INSTALLED;
-        if (callHook) {
-            context = _doPreHook(hook, msg.value, data);
         }
         (bool success, bytes memory ret) = address(this).delegatecall(data);
         if (!success) {
             assembly {
                 revert(add(ret, 0x20), mload(ret))
             }
-        }
-        if (callHook) {
-            _doPostHook(hook, context);
         }
     }
 
