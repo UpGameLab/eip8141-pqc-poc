@@ -53,7 +53,8 @@ import {
     EXEC_MODE_DEFAULT,
     ERC1271_MAGICVALUE,
     ERC1271_INVALID,
-    MAGIC_VALUE_SIG_REPLAYABLE
+    MAGIC_VALUE_SIG_REPLAYABLE,
+    SIG_VALIDATION_FAILED
 } from "./types/Constants8141.sol";
 
 /// @title Kernel8141
@@ -209,7 +210,8 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         address account = FrameTxLib.txSender();
         bytes32 sigHash = FrameTxLib.sigHash();
         uint256 senderFrameIdx = _findSenderFrameIndex();
-        _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, sig);
+        ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, sig);
+        if (ValidationData.unwrap(vd) != 0) revert InvalidSignature();
         _verifyHookFrames(vId);
         FrameTxLib.approveEmpty(scope);
     }
@@ -255,7 +257,8 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
             }
         }
 
-        _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+        ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+        if (ValidationData.unwrap(vd) != 0) revert InvalidSignature();
         _verifyHookFrames(vId);
 
         FrameTxLib.approveEmpty(scope);
@@ -360,7 +363,8 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
             revert InvalidSelector();
         }
 
-        _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+        ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
+        if (ValidationData.unwrap(vd) != 0) revert InvalidSignature();
         _verifyHookFrames(vId);
 
         FrameTxLib.approveEmpty(scope);
