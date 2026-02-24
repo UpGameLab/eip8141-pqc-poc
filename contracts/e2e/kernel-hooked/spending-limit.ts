@@ -5,7 +5,7 @@
  * frame target, using the frame-native hook architecture:
  *
  *   Frame 0: DEFAULT(hook)   → hook.check()        — pre-check spending limit
- *   Frame 1: VERIFY(kernel)  → kernel.validate()    — verifies frameStatus(0)==SUCCESS
+ *   Frame 1: VERIFY(kernel)  → kernel.validate()    — verifies hook DEFAULT frame exists (structural check)
  *   Frame 2: SENDER(kernel)  → kernel.execute()     — actual execution
  *
  * Usage: cd contracts && npx tsx e2e/kernel-hooked/spending-limit.ts

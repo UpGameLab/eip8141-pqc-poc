@@ -103,14 +103,14 @@ Run `make benchmark` against the local devnet to reproduce:
 
 | Account | Operation | Total Gas | Verify | Sender |
 |---|---|---:|---:|---:|
-| Simple8141 | ETH transfer | 33,005 | 5,854 | 9,803 |
-| Simple8141 | ERC20 transfer | 56,772 | 5,854 | 32,814 |
-| Kernel8141 | ETH transfer | 49,943 | 20,677 | 11,486 |
-| Kernel8141 | ERC20 transfer | 73,445 | 20,677 | 34,384 |
-| Coinbase | ETH transfer | 46,253 | 17,316 | 10,869 |
-| Coinbase | ERC20 transfer | 70,130 | 17,316 | 34,002 |
-| LightAccount | ETH transfer | 39,539 | 11,506 | 10,405 |
-| LightAccount | ERC20 transfer | 63,425 | 11,506 | 33,535 |
+| Simple8141 | ETH transfer | 58,017 | 5,854 | 34,803 |
+| Simple8141 | ERC20 transfer | 56,760 | 5,854 | 32,814 |
+| Kernel8141 | ETH transfer | 74,911 | 20,657 | 36,486 |
+| Kernel8141 | ERC20 transfer | 73,425 | 20,657 | 34,384 |
+| Coinbase | ETH transfer | 71,248 | 17,311 | 35,869 |
+| Coinbase | ERC20 transfer | 70,137 | 17,311 | 34,002 |
+| LightAccount | ETH transfer | 64,612 | 11,579 | 35,405 |
+| LightAccount | ERC20 transfer | 63,486 | 11,579 | 33,535 |
 
 > These numbers include first-time costs: account creation for the ETH recipient (G_newaccount = 25,000 gas) and zero-to-non-zero SSTORE for the ERC20 recipient balance (20,000 gas). In steady-state (sending to existing accounts with non-zero balances), total gas is roughly **~25,000 lower for ETH** and **~17,000 lower for ERC20** transfers. Each account uses a separate recipient address to ensure fair comparison regardless of benchmark execution order.
 
