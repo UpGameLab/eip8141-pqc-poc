@@ -455,6 +455,23 @@ abstract contract ValidationManager8141 is EIP712, SelectorManager8141, HookMana
         return (sig, validationData);
     }
 
+    // ── Stateful Policy Consumption (SENDER phase) ─────────────────────
+
+    /// @notice Consume stateful policies in SENDER frame context.
+    /// @dev Called from executeHooked() for permission-based validation.
+    ///      Iterates all policies and calls consumeFrameTxPolicy() on each.
+    ///      Read-only policies implement this as no-op; stateful policies
+    ///      (e.g. GasPolicy) perform state writes here (e.g. budget decrement).
+    function _consumeStatefulPolicies(PermissionId pId) internal {
+        ValidationStorage storage state = _validationStorage();
+        PolicyData[] storage policies = state.permissionConfig[pId].policyData;
+        bytes32 permId = bytes32(PermissionId.unwrap(pId));
+        for (uint256 i = 0; i < policies.length; i++) {
+            (, IPolicy8141 policy) = ValidatorLib8141.decodePolicyData(policies[i]);
+            policy.consumeFrameTxPolicy(permId, address(this));
+        }
+    }
+
     // ── Enable Mode ─────────────────────────────────────────────────────
 
     /// @notice Handle enable mode — install + validate in one VERIFY frame call.

@@ -102,7 +102,6 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     error InitConfigError(uint256 idx);
     error AlreadyInitialized();
     error SenderFrameNotFound();
-    error RequiredHookFrameMissing();
     error NoPriorVerifyApproval();
     error EnableInstallFrameNotFound();
     error SignatureTooShort();
@@ -209,7 +208,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     // ── VERIFY frame: Validation ────────────────────────────────────────
 
     /// @notice Root validator validation. Called during VERIFY frame.
-    /// @dev Verifies signature, then checks that required hook DEFAULT frames are present.
+    /// @dev Verifies signature. If hook is configured, enforces SENDER frame calls executeHooked().
     function validate(bytes calldata sig, uint8 scope) external {
         _requireVerifyFrame();
         ValidationStorage storage vs = _validationStorage();
@@ -219,7 +218,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         uint256 senderFrameIdx = _findSenderFrameIndex();
         ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, sig);
         if (ValidationData.unwrap(vd) != 0) revert InvalidSignature();
-        _verifyHookFrames(vId);
+        _enforceHookedExecution(vId, senderFrameIdx);
         FrameTxLib.approveEmpty(scope);
     }
 
@@ -266,7 +265,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
 
         ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
         if (ValidationData.unwrap(vd) != 0) revert InvalidSignature();
-        _verifyHookFrames(vId);
+        _enforceHookedExecution(vId, senderFrameIdx);
 
         FrameTxLib.approveEmpty(scope);
     }
@@ -336,6 +335,8 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     }
 
     /// @notice Permission-based validation (ISigner + IPolicy[]).
+    /// @dev Permissions always enforce executeHooked() in SENDER frame to ensure
+    ///      stateful policy consumption runs in SENDER context (where state writes are allowed).
     function validatePermission(bytes calldata sig, uint8 scope) external {
         _requireVerifyFrame();
         ValidationStorage storage vs = _validationStorage();
@@ -364,32 +365,65 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
             revert InvalidNonce();
         }
 
-        // EIP-8141 native selector ACL
-        bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
-        if (!vs.allowedSelectors[vId][senderSelector]) {
-            revert InvalidSelector();
-        }
+        // Permissions always require executeHooked in SENDER frame
+        // to ensure stateful policies are consumed and hooks run inline
+        _enforcePermissionExecution(vId, senderFrameIdx);
 
         ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
         // Check only the result portion (bottom 160 bits) of ValidationData.
         // _intersectValidationData always populates validUntil bits (making raw value != 0),
         // so we must use getValidationResult() which extracts only the success/fail address.
         if (getValidationResult(vd) != address(0)) revert InvalidSignature();
-        _verifyHookFrames(vId);
 
         FrameTxLib.approveEmpty(scope);
     }
 
     // ── SENDER frame: Execution ─────────────────────────────────────────
 
-    /// @notice Execute a transaction. Called in SENDER frame.
-    /// @dev Hook orchestration removed — hooks execute in separate DEFAULT frames.
-    ///      VERIFY frame verifies hook frame presence via _verifyHookFrames().
+    /// @notice Execute a transaction. Called in SENDER frame (no hook/policy).
+    /// @dev For validators/permissions with hooks or stateful policies, use executeHooked().
     function execute(ExecMode execMode, bytes calldata executionCalldata) external payable override {
         if (msg.sender != address(this)) {
             revert InvalidCaller();
         }
         ExecLib8141.execute(execMode, executionCalldata);
+    }
+
+    /// @notice Execute with inline hook pre/post and stateful policy consumption.
+    /// @dev Called in SENDER frame. VERIFY frame enforces this selector when hooks or
+    ///      permission-based policies are configured, and verifies vId matches.
+    ///
+    ///      Execution flow:
+    ///        1. Consume stateful policies (if permission-based)
+    ///        2. Hook preCheck (if hook configured)
+    ///        3. Execute
+    ///        4. Hook postCheck (if hook configured)
+    ///
+    ///      This replaces the previous DEFAULT frame hook pattern with inline execution,
+    ///      consistent with executeFromExecutor()'s existing inline hook pattern.
+    function executeHooked(bytes21 vId, ExecMode execMode, bytes calldata executionCalldata) external payable {
+        if (msg.sender != address(this)) {
+            revert InvalidCaller();
+        }
+
+        ValidationStorage storage vs = _validationStorage();
+        ValidationId validationId = ValidationId.wrap(vId);
+
+        // 1. Consume stateful policies (if permission-based validation)
+        if (ValidatorLib8141.getType(validationId) == VALIDATION_TYPE_PERMISSION) {
+            _consumeStatefulPolicies(ValidatorLib8141.getPermissionId(validationId));
+        }
+
+        // 2. Hook pre/post (if configured, not sentinel)
+        IHook8141 hook = vs.validationConfig[validationId].hook;
+        if (address(hook) > address(1)) {
+            uint256 value = _extractExecutionValue(execMode, executionCalldata);
+            bytes memory context = _doPreHook(hook, value, executionCalldata);
+            ExecLib8141.execute(execMode, executionCalldata);
+            _doPostHook(hook, context);
+        } else {
+            ExecLib8141.execute(execMode, executionCalldata);
+        }
     }
 
     /// @notice Execute from an authorized executor module.
@@ -707,30 +741,76 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         revert SenderFrameNotFound();
     }
 
-    /// @dev Verify that required hook DEFAULT frames are present in the transaction.
-    ///      If a validator has a hook configured (not sentinel), a DEFAULT frame targeting
-    ///      that hook must exist in the transaction. This is a structural check only —
-    ///      runtime status cannot be verified because during mempool VERIFY simulation,
-    ///      DEFAULT frames have not yet executed (FrameResults are zero-initialized).
-    function _verifyHookFrames(ValidationId vId) internal view {
+    /// @dev Enforce that SENDER frame calls executeHooked() when a hook is configured.
+    ///      Verifies both the selector and the vId in SENDER calldata match.
+    ///      Used by validate() and validateFromSenderFrame() for validator-based flows.
+    function _enforceHookedExecution(ValidationId vId, uint256 senderFrameIdx) internal view {
         IHook8141 hook = _validationStorage().validationConfig[vId].hook;
 
-        // Sentinel values: no hook required
+        // Sentinel values: no hook, no enforcement needed
         if (address(hook) == HOOK_INSTALLED || address(hook) == HOOK_NOT_INSTALLED) return;
 
-        uint256 current = FrameTxLib.currentFrameIndex();
-        uint256 count = FrameTxLib.frameCount();
+        // SENDER frame must call executeHooked
+        bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
+        if (senderSelector != this.executeHooked.selector) revert InvalidSelector();
 
-        for (uint256 i = 0; i < count; i++) {
-            if (i == current) continue; // Skip current VERIFY frame
-            if (
-                FrameTxLib.frameMode(i) == FRAME_MODE_DEFAULT
-                    && FrameTxLib.frameTarget(i) == address(hook)
-            ) {
-                return; // Hook frame found
+        // vId in SENDER calldata must match the validation vId
+        // executeHooked(bytes21 vId, ...) — bytes21 is right-padded in ABI encoding
+        bytes21 senderVId = bytes21(FrameTxLib.frameDataLoad(senderFrameIdx, 4));
+        if (senderVId != ValidationId.unwrap(vId)) revert InvalidSelector();
+    }
+
+    /// @dev Enforce that SENDER frame calls executeHooked() for permission-based validation.
+    ///      Permissions always require executeHooked to ensure stateful policy consumption.
+    ///      Verifies both the selector and the vId in SENDER calldata match.
+    function _enforcePermissionExecution(ValidationId vId, uint256 senderFrameIdx) internal view {
+        bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
+        if (senderSelector != this.executeHooked.selector) revert InvalidSelector();
+
+        bytes21 senderVId = bytes21(FrameTxLib.frameDataLoad(senderFrameIdx, 4));
+        if (senderVId != ValidationId.unwrap(vId)) revert InvalidSelector();
+    }
+
+    /// @dev Extract total ETH value from execution calldata.
+    ///      Supports CALLTYPE_SINGLE, CALLTYPE_BATCH, and CALLTYPE_DELEGATECALL.
+    ///      Used by executeHooked() to pass value to hook preCheck.
+    function _extractExecutionValue(ExecMode execMode, bytes calldata executionCalldata)
+        internal
+        pure
+        returns (uint256)
+    {
+        uint8 callType = uint8(bytes1(ExecMode.unwrap(execMode)));
+        if (callType == 0x00) {
+            // SINGLE: packed [20B target][32B value][calldata]
+            if (executionCalldata.length < 52) return 0;
+            return uint256(bytes32(executionCalldata[20:52]));
+        } else if (callType == 0x01) {
+            // BATCH: abi.encode(Execution[])
+            return _sumBatchExecutionValues(executionCalldata);
+        }
+        // DELEGATECALL (0x02): no value transfer
+        return 0;
+    }
+
+    /// @dev Sum ETH values from ABI-encoded Execution[] array.
+    function _sumBatchExecutionValues(bytes calldata executionCalldata) internal pure returns (uint256 total) {
+        // ABI layout: [32B offset to array][32B array length][N * 32B element offsets][element data]
+        // Each element: [32B target][32B value][32B calldata offset][calldata length + bytes]
+        assembly {
+            let baseOffset := executionCalldata.offset
+            let arrDataOffset := calldataload(baseOffset)
+            let arrBase := add(baseOffset, arrDataOffset)
+            let arrLen := calldataload(arrBase)
+            let offsetsBase := add(arrBase, 0x20)
+
+            for { let i := 0 } lt(i, arrLen) { i := add(i, 1) } {
+                let elemOffset := calldataload(add(offsetsBase, mul(i, 0x20)))
+                let elemPtr := add(offsetsBase, elemOffset)
+                // value is the second 32-byte word in each Execution struct
+                let value := calldataload(add(elemPtr, 0x20))
+                total := add(total, value)
             }
         }
-        revert RequiredHookFrameMissing();
     }
 
     /// @dev Verify that a prior VERIFY frame for this account approved the transaction.
