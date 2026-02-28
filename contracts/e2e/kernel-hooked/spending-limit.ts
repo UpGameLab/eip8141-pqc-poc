@@ -1,12 +1,11 @@
 /**
- * E2E: SpendingLimitHook lifecycle test (frame-native hook pattern)
+ * E2E: SpendingLimitHook lifecycle test (inline hook pattern)
  *
- * Tests that SpendingLimitHook enforces daily spending limits as a DEFAULT
- * frame target, using the frame-native hook architecture:
+ * Tests that SpendingLimitHook enforces daily spending limits using the
+ * inline hook model, where hook pre/post are called inside the SENDER frame:
  *
- *   Frame 0: DEFAULT(hook)   → hook.check()        — pre-check spending limit
- *   Frame 1: VERIFY(kernel)  → kernel.validate()    — verifies hook DEFAULT frame exists (structural check)
- *   Frame 2: SENDER(kernel)  → kernel.execute()     — actual execution
+ *   Frame 0: VERIFY(kernel)  → kernel.validate(sig, 1)     — validates signature, enforces executeHooked selector
+ *   Frame 1: SENDER(kernel)  → kernel.executeHooked(vId, mode, data) — hook pre/post + execution (atomic)
  *
  * Usage: cd contracts && npx tsx e2e/kernel-hooked/spending-limit.ts
  */
@@ -24,7 +23,7 @@ import {
   type Hash,
   type Address,
 } from "viem";
-import { CHAIN_ID, DEV_KEY, DEAD_ADDR, FRAME_MODE_DEFAULT, FRAME_MODE_VERIFY, FRAME_MODE_SENDER, CHAIN_DEF } from "../helpers/config.js";
+import { CHAIN_ID, DEV_KEY, DEAD_ADDR, FRAME_MODE_VERIFY, FRAME_MODE_SENDER, CHAIN_DEF } from "../helpers/config.js";
 import { createTestClients, waitForReceipt, fundAccount } from "../helpers/client.js";
 import { loadBytecode, deployContract } from "../helpers/deploy.js";
 import { computeSigHash, encodeFrameTx, type FrameTxParams } from "../helpers/frame-tx.js";
@@ -41,23 +40,19 @@ function encodeSingleExec(target: Address, value: bigint, data: Hex = "0x"): Hex
   return `0x${targetHex}${valueHex}${dataHex}` as Hex;
 }
 
-// SpendingLimitHook.check() selector: keccak256("check()") = 0x919840ad
-const HOOK_CHECK_SELECTOR = "0x919840ad" as Hex;
-
 // ── Frame TX helpers ────────────────────────────────────────────────
 
 /**
- * Send a 3-frame hooked transaction:
- *   Frame 0: DEFAULT(hook)  → hook.check()
- *   Frame 1: VERIFY(kernel) → kernel.validate(sig, 2)
- *   Frame 2: SENDER(kernel) → kernel.execute(...)
+ * Send a 2-frame hooked transaction (inline hook pattern):
+ *   Frame 0: VERIFY(kernel) → kernel.validate(sig, 1)
+ *   Frame 1: SENDER(kernel) → kernel.executeHooked(vId, mode, data)
  */
 async function sendHookedFrameTx(
   publicClient: any,
   kernelAddr: Address,
-  hookAddr: Address,
+  rootVId: Hex,
   senderCalldata: Hex,
-  senderGas = 300_000n
+  senderGas = 500_000n
 ): Promise<any> {
   const kernelNonce = await publicClient.getTransactionCount({ address: kernelAddr });
   const block = await publicClient.getBlock();
@@ -70,27 +65,25 @@ async function sendHookedFrameTx(
     gasTipCap: 1_000_000_000n,
     gasFeeCap,
     frames: [
-      // Frame 0: DEFAULT — hook.check() (included in sigHash)
-      { mode: FRAME_MODE_DEFAULT, target: hookAddr, gasLimit: 200_000n, data: hexToBytes(HOOK_CHECK_SELECTOR) },
-      // Frame 1: VERIFY — kernel.validate() (data excluded from sigHash per spec)
+      // Frame 0: VERIFY — kernel.validate() (data excluded from sigHash per spec)
       { mode: FRAME_MODE_VERIFY, target: null, gasLimit: 300_000n, data: new Uint8Array(0) },
-      // Frame 2: SENDER — kernel.execute()
+      // Frame 1: SENDER — kernel.executeHooked() (hook pre/post + execution, atomic)
       { mode: FRAME_MODE_SENDER, target: null, gasLimit: senderGas, data: hexToBytes(senderCalldata) },
     ],
     blobFeeCap: 0n,
     blobHashes: [],
   };
 
-  // Compute sigHash (VERIFY data stays empty, DEFAULT + SENDER data included)
+  // Compute sigHash (VERIFY data stays empty, SENDER data included)
   const sigHash = computeSigHash(frameTxParams);
   const { packed: packedSig } = signFrameHash(sigHash, DEV_KEY);
   const validateCalldata = encodeFunctionData({
     abi: kernelAbi,
     functionName: "validate",
-    args: [bytesToHex(packedSig), 2],
+    args: [bytesToHex(packedSig), 1],  // scope=1: approve frames 0-1
   });
-  // Set VERIFY frame data (frame index 1)
-  frameTxParams.frames[1].data = hexToBytes(validateCalldata);
+  // Set VERIFY frame data (frame index 0)
+  frameTxParams.frames[0].data = hexToBytes(validateCalldata);
 
   const rawTx = encodeFrameTx(frameTxParams);
   const txHash = (await publicClient.request({
@@ -105,7 +98,7 @@ async function main() {
   const { publicClient, walletClient, devAddr } = createTestClients();
 
   const balance = await publicClient.getBalance({ address: devAddr });
-  banner("SpendingLimitHook E2E (Frame-Native)");
+  banner("SpendingLimitHook E2E (Inline Hook)");
   info(`Dev account: ${devAddr}`);
   info(`Balance: ${formatEther(balance)} ETH`);
 
@@ -181,19 +174,19 @@ async function main() {
   // ── Tests ──────────────────────────────────────────────────────────
   const EXEC_MODE_SINGLE_DEFAULT = padHex("0x0000" as Hex, { size: 32, dir: "right" });
 
-  // Test 1: Transfer 3 ETH with frame-native hook pattern
-  testHeader(1, "Transfer 3 ETH (DEFAULT→VERIFY→SENDER, frame-native hook)");
+  // Test 1: Transfer 3 ETH with inline hook pattern
+  testHeader(1, "Transfer 3 ETH (VERIFY→SENDER, inline hook)");
   {
     const execCalldata = encodeSingleExec(DEAD_ADDR, parseEther("3"));
     const senderCalldata = encodeFunctionData({
       abi: kernelAbi,
-      functionName: "execute",
-      args: [EXEC_MODE_SINGLE_DEFAULT, execCalldata],
+      functionName: "executeHooked",
+      args: [rootVId, EXEC_MODE_SINGLE_DEFAULT, execCalldata],
     });
-    const receipt = await sendHookedFrameTx(publicClient, kernelAddr, hookAddr, senderCalldata);
+    const receipt = await sendHookedFrameTx(publicClient, kernelAddr, rootVId, senderCalldata);
     printReceipt(receipt);
     if (receipt.status !== "0x1") throw new Error("Transfer should succeed (within 5 ETH limit)");
-    testPassed("3 ETH transferred with frame-native hook (DEFAULT→VERIFY→SENDER)");
+    testPassed("3 ETH transferred with inline hook (VERIFY→SENDER)");
   }
 
   // Test 2: Transfer 1.5 ETH — cumulative 4.5 ETH, still within daily limit
@@ -202,31 +195,31 @@ async function main() {
     const execCalldata = encodeSingleExec(DEAD_ADDR, parseEther("1.5"));
     const senderCalldata = encodeFunctionData({
       abi: kernelAbi,
-      functionName: "execute",
-      args: [EXEC_MODE_SINGLE_DEFAULT, execCalldata],
+      functionName: "executeHooked",
+      args: [rootVId, EXEC_MODE_SINGLE_DEFAULT, execCalldata],
     });
-    const receipt = await sendHookedFrameTx(publicClient, kernelAddr, hookAddr, senderCalldata);
+    const receipt = await sendHookedFrameTx(publicClient, kernelAddr, rootVId, senderCalldata);
     printReceipt(receipt);
     if (receipt.status !== "0x1") throw new Error("Transfer should succeed (4.5 ETH < 5 ETH limit)");
     testPassed("1.5 ETH transferred (cumulative spending enforcement verified)");
   }
 
-  // Test 3: Zero-value call with frame-native hook
-  testHeader(3, "Zero-value call (frame-native hook, no spending)");
+  // Test 3: Zero-value call with inline hook
+  testHeader(3, "Zero-value call (inline hook, no spending)");
   {
     const execCalldata = encodeSingleExec(DEAD_ADDR, 0n);
     const senderCalldata = encodeFunctionData({
       abi: kernelAbi,
-      functionName: "execute",
-      args: [EXEC_MODE_SINGLE_DEFAULT, execCalldata],
+      functionName: "executeHooked",
+      args: [rootVId, EXEC_MODE_SINGLE_DEFAULT, execCalldata],
     });
-    const receipt = await sendHookedFrameTx(publicClient, kernelAddr, hookAddr, senderCalldata);
+    const receipt = await sendHookedFrameTx(publicClient, kernelAddr, rootVId, senderCalldata);
     printReceipt(receipt);
     if (receipt.status !== "0x1") throw new Error("Zero-value call should succeed");
-    testPassed("Zero-value call succeeded with frame-native hook");
+    testPassed("Zero-value call succeeded with inline hook");
   }
 
-  summary("SpendingLimitHook (Frame-Native)", 3);
+  summary("SpendingLimitHook (Inline Hook)", 3);
 }
 
 main().catch((err) => {

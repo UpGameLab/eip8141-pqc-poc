@@ -79,6 +79,17 @@ export const kernelAbi = [
   },
   {
     type: "function",
+    name: "executeHooked",
+    inputs: [
+      { name: "vId", type: "bytes21" },
+      { name: "execMode", type: "bytes32" },
+      { name: "executionCalldata", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "payable",
+  },
+  {
+    type: "function",
     name: "executeFromExecutor",
     inputs: [
       { name: "execMode", type: "bytes32" },
