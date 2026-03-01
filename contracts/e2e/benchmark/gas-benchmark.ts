@@ -17,15 +17,13 @@ import {
   encodeAbiParameters,
   parseAbiParameters,
   encodeFunctionData,
-  padHex,
   type Hex,
   type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { toSimple8141Account } from "viem/eip8141";
-import {
-  DEV_KEY,
-} from "../helpers/config.js";
+import { DEV_KEY, HOOK_INSTALLED } from "../helpers/config.js";
+import { encodeExecMode, encodeSingleExec } from "../helpers/exec-encoding.js";
 
 // Per-account recipient addresses to avoid SSTORE zero→non-zero bias
 const DEAD_SIMPLE   = "0x000000000000000000000000000000000000deA1" as Address;
@@ -102,8 +100,6 @@ async function deploySimple(): Promise<Address> {
 // ─── Kernel8141 ─────────────────────────────────────────────
 
 async function deployKernel(): Promise<{ kernelAddr: Address; validatorAddr: Address }> {
-  const HOOK_INSTALLED = "0x0000000000000000000000000000000000000001" as Address;
-
   const { address: validatorAddr } = await deployContract(
     walletClient, publicClient, loadBytecode("ECDSAValidator"), 3_000_000n, "ECDSAValidator"
   );
@@ -308,13 +304,7 @@ async function main() {
   // Kernel uses execute(bytes32 execMode, bytes executionCalldata)
   // ExecMode: single + default = 0x0000...
   // Single exec calldata: abi.encodePacked(target(20B), value(32B), calldata)
-  const EXEC_MODE_SINGLE = padHex("0x0000" as Hex, { size: 32, dir: "right" });
-  const encodeSingleExec = (target: Address, value: bigint, data: Hex = "0x"): Hex => {
-    const t = target.slice(2).toLowerCase().padStart(40, "0");
-    const v = value.toString(16).padStart(64, "0");
-    const d = data.slice(2);
-    return `0x${t}${v}${d}` as Hex;
-  };
+  const EXEC_MODE_SINGLE = encodeExecMode("0x00" as Hex, "0x00" as Hex);
   const kernelEthCalldata = encodeFunctionData({
     abi: kernelAbi,
     functionName: "execute",

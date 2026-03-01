@@ -7,12 +7,14 @@ export function verifyReceipt(
     expectVerifyStatus?: string;
     expectSenderStatus?: string;
     expectFrameCount?: number;
+    senderFrameIndex?: number;
   } = {}
 ) {
   const {
     expectVerifyStatus = "0x4",
     expectSenderStatus = "0x1",
     expectFrameCount = 2,
+    senderFrameIndex = 1,
   } = options;
 
   if (receipt.status !== "0x1") {
@@ -48,9 +50,9 @@ export function verifyReceipt(
         `VERIFY frame: got ${verifyStatus}, want ${expectVerifyStatus}`
       );
     }
-    if (receipt.frameReceipts[1].status !== expectSenderStatus) {
+    if (receipt.frameReceipts[senderFrameIndex].status !== expectSenderStatus) {
       throw new Error(
-        `SENDER frame: got ${receipt.frameReceipts[1].status}, want ${expectSenderStatus}`
+        `SENDER frame[${senderFrameIndex}]: got ${receipt.frameReceipts[senderFrameIndex].status}, want ${expectSenderStatus}`
       );
     }
   }

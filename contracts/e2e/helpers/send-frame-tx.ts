@@ -33,6 +33,17 @@ export interface AccountOptions {
   senderGas?: bigint;
 }
 
+/** Shared encodeCalls: map each call to a SENDER frame targeting the sender itself. */
+function defaultEncodeCalls(senderGas: bigint) {
+  return (calls: { data?: Hex }[]) =>
+    calls.map((c) => ({
+      mode: "sender" as const,
+      target: null,
+      gasLimit: senderGas,
+      data: c.data ?? ("0x" as Hex),
+    }));
+}
+
 // ── Kernel ──────────────────────────────────────────────────────────
 
 /** Root validator: validate(packedSig, scope) */
@@ -54,14 +65,7 @@ export function createKernelAccount(
       });
       return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
     },
-    encodeCalls(calls) {
-      return calls.map((c) => ({
-        mode: "sender" as const,
-        target: null,
-        gasLimit: senderGas,
-        data: c.data ?? ("0x" as Hex),
-      }));
-    },
+    encodeCalls: defaultEncodeCalls(senderGas),
   });
 }
 
@@ -87,14 +91,7 @@ export function createKernelValidatorAccount(
       });
       return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
     },
-    encodeCalls(calls) {
-      return calls.map((c) => ({
-        mode: "sender" as const,
-        target: null,
-        gasLimit: senderGas,
-        data: c.data ?? ("0x" as Hex),
-      }));
-    },
+    encodeCalls: defaultEncodeCalls(senderGas),
   });
 }
 
@@ -120,14 +117,7 @@ export function createKernelPermissionAccount(
       });
       return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
     },
-    encodeCalls(calls) {
-      return calls.map((c) => ({
-        mode: "sender" as const,
-        target: null,
-        gasLimit: senderGas,
-        data: c.data ?? ("0x" as Hex),
-      }));
-    },
+    encodeCalls: defaultEncodeCalls(senderGas),
   });
 }
 
@@ -157,14 +147,7 @@ export function createCoinbaseAccount(
       });
       return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
     },
-    encodeCalls(calls) {
-      return calls.map((c) => ({
-        mode: "sender" as const,
-        target: null,
-        gasLimit: senderGas,
-        data: c.data ?? ("0x" as Hex),
-      }));
-    },
+    encodeCalls: defaultEncodeCalls(senderGas),
   });
 }
 
@@ -191,14 +174,7 @@ export function createLightAccount(
       });
       return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
     },
-    encodeCalls(calls) {
-      return calls.map((c) => ({
-        mode: "sender" as const,
-        target: null,
-        gasLimit: senderGas,
-        data: c.data ?? ("0x" as Hex),
-      }));
-    },
+    encodeCalls: defaultEncodeCalls(senderGas),
   });
 }
 
