@@ -154,19 +154,19 @@ Port of [Alchemy LightAccount](https://github.com/alchemyplatform/light-account)
 
 ### Kernel8141
 
-`contracts/src/example/kernel/` (~700 lines core + modules)
+`contracts/src/example/kernel/` (~845 lines core + modules)
 
-Port of [Kernel v3](https://github.com/zerodevapp/kernel) by ZeroDev. Fully modular account with pluggable validators, executors, hooks, and policies — redesigned around EIP-8141's frame-native architecture.
+Port of [Kernel v3](https://github.com/zerodevapp/kernel) by ZeroDev. Fully modular account with pluggable validators, executors, hooks, and policies — redesigned around EIP-8141's frame architecture.
 
-The key architectural difference from Kernel v3: **hooks execute as independent DEFAULT frames** rather than being orchestrated by the account contract. The VERIFY frame structurally verifies that required hook frames exist in the transaction, and execution proceeds without hook calls.
+The key architectural difference from Kernel v3: **hooks execute inline in the SENDER frame** via `executeHooked()`, which wraps execution with `preCheck()`/`postCheck()` calls. The VERIFY frame enforces that the SENDER frame calls `executeHooked()` when a hook is configured, ensuring atomic hook execution.
 
 **Architecture:**
 ```
 Kernel8141
-  -> ValidationManager8141  (validation, enable mode, ERC-1271)
-      -> SelectorManager8141   (fallback routing by selector)
-      -> HookManager8141       (pre/post hooks for fallback/executor paths)
-      -> ExecutorManager8141   (executor module registry)
+  └── ValidationManager8141  (validator/permission/nonce/enable/EIP-712/ERC-1271)
+        ├── SelectorManager8141   (fallback selector routing)
+        ├── HookManager8141       (unified hook lifecycle)
+        └── ExecutorManager8141   (executor registry)
 ```
 
 **Module types:**
@@ -189,13 +189,12 @@ Frame 0: VERIFY(kernel)  -> validate(sig, scope=2)          -> APPROVE(both)
 Frame 1: SENDER(kernel)  -> execute(mode, data)
 ```
 
-**Pattern 2: Root validator + hook (frame-native)**
+**Pattern 2: Root validator + hook (inline)**
 ```
-Frame 0: DEFAULT(hook)   -> hook.check()                    [pre-check]
-Frame 1: VERIFY(kernel)  -> validate(sig, scope=2)          -> APPROVE(both)
-Frame 2: SENDER(kernel)  -> execute(mode, data)
+Frame 0: VERIFY(kernel)  -> validate(sig, scope)            -> APPROVE(both), enforces executeHooked selector
+Frame 1: SENDER(kernel)  -> executeHooked(vId, mode, data)  -> hook preCheck + execute + hook postCheck (atomic)
 ```
-The hook runs in its own DEFAULT frame before VERIFY. The VERIFY frame verifies that a DEFAULT frame targeting the required hook exists in the transaction via `_verifyHookFrames()`. The SENDER frame executes directly — no hook orchestration needed.
+The VERIFY frame uses `_enforceHookedExecution()` to verify that the SENDER frame calls `executeHooked()` with the correct `vId`. The hook's `preCheck()`/`postCheck()` run inline in the SENDER frame, making the hook and execution atomic.
 
 **Pattern 3: Non-root validator (sigHash-bound selector ACL)**
 ```
@@ -212,55 +211,65 @@ Frame 2: SENDER(kernel)  -> execute(mode, data)
 ```
 Since VERIFY frames are read-only, enable mode is split: VERIFY verifies the enable signature (view-only), then a DEFAULT frame performs the actual validator installation (`sstore`). The DEFAULT frame calls `_requirePriorVerifyApproval()` to ensure a preceding VERIFY frame approved the transaction.
 
-**Pattern 5: Permission-based validation**
+**Pattern 5: Permission-based validation (with stateful policy consumption)**
 ```
-Frame 0: VERIFY(kernel)  -> validatePermission(sig, scope=2)  -> APPROVE(both)
-Frame 1: SENDER(kernel)  -> execute(mode, data)
+Frame 0: VERIFY(kernel)  -> validatePermission(sig, scope)     -> APPROVE(both), enforces executeHooked selector
+Frame 1: SENDER(kernel)  -> executeHooked(vId, mode, data)     -> policy consume + hook + execution
 ```
+Permissions always require `executeHooked()` via `_enforcePermissionExecution()`, even without a hook, to ensure stateful policies (e.g. `GasPolicy8141`) can consume their state in the SENDER frame.
 
-#### Frame-Native Hook Architecture
+#### Inline Hook Architecture
 
-In Kernel v3 (ERC-4337), hooks are orchestrated by the account: `execute()` calls `hook.preCheck()`, runs the execution, then calls `hook.postCheck()`. The account is the hook orchestrator.
-
-In Kernel8141, hooks are **independent frame participants**:
-
-1. **Hook = DEFAULT frame.** The hook contract runs in its own DEFAULT frame, called directly by the protocol. It uses `FrameTxLib.txSender()` to identify the account and `frameDataLoad()` to read execution parameters from the SENDER frame.
-
-2. **VERIFY verifies frame structure.** The `_verifyHookFrames()` function checks that a DEFAULT frame targeting the required hook exists in the transaction. This is a structural check only — it cannot verify runtime success because during mempool VERIFY simulation, DEFAULT frames have not yet executed (`FrameResults` are zero-initialized by the framepool).
-
-3. **SENDER executes directly.** `execute()` and `validatedCall()` contain no hook calls — just the execution logic. This simplifies the execution path and reduces gas.
-
-**SpendingLimitHook example** (`SpendingLimitHook.sol`):
-
-The hook implements a dual interface — `check()` for frame-native use and `preCheck()`/`postCheck()` for fallback handler compatibility.
+In Kernel v3 (ERC-4337), hooks are orchestrated by the account: `execute()` calls `hook.preCheck()`, runs the execution, then calls `hook.postCheck()`. Kernel8141 preserves this same pattern but executes hooks **inline in the SENDER frame** via `executeHooked()`:
 
 ```solidity
-function check() external {
-    // Account identity via TXPARAM (msg.sender = ENTRY_POINT in DEFAULT)
-    address account = FrameTxLib.txSender();
-
-    // Read execution value from SENDER frame's calldata
-    uint256 senderIdx = _findSenderFrame();
-    uint256 totalValue = _extractValueFromSenderFrame(senderIdx);
-
-    // Enforce daily spending limit
-    // ...
+function executeHooked(bytes21 vId, ExecMode execMode, bytes calldata executionCalldata) external payable {
+    // 1. Consume stateful policies (if permission-based)
+    if (getType(validationId) == VALIDATION_TYPE_PERMISSION) {
+        _consumeStatefulPolicies(getPermissionId(validationId));
+    }
+    // 2. Hook pre/post (if configured)
+    IHook8141 hook = validationConfig[validationId].hook;
+    if (_isCallableHook(hook)) {
+        uint256 value = _extractExecutionValue(execMode, executionCalldata);
+        bytes memory context = _doPreHook(hook, value, executionCalldata);
+        execute(execMode, executionCalldata);
+        _doPostHook(hook, context);
+    } else {
+        execute(execMode, executionCalldata);
+    }
 }
 ```
 
-The value extraction reads the SENDER frame's `execute()` calldata layout:
-```
-Frame data offset:  [4B selector][32B ExecMode][32B offset][32B length][executionCalldata...]
-SINGLE calldata:    [20B target][32B value][callData...]
-  -> value at frame offset 120 (= 4 + 32 + 32 + 32 + 20)
-BATCH calldata:     ABI-encoded Execution[] -> sum all values
+**VERIFY enforces executeHooked.** When a hook is configured for a validator, `_enforceHookedExecution()` in the VERIFY frame reads the SENDER frame's selector and `vId` via `frameDataLoad()` to verify the SENDER frame calls `executeHooked()` with the correct validation ID. For permission-based validation, `_enforcePermissionExecution()` always requires `executeHooked()` regardless of hook presence, to ensure stateful policy consumption.
+
+**Hook sentinel values.** Hook addresses use sentinel values to control behavior:
+- `address(0)` — hook not installed
+- `address(1)` — hook installed but no callable hook (`preCheck`/`postCheck` skipped)
+- `> address(1)` — callable hook, `preCheck`/`postCheck` executed inline
+
+The `_isCallableHook()` helper returns true only for `address(hook) > address(1)`.
+
+**SpendingLimitHook example** (`SpendingLimitHook.sol`):
+
+The hook implements `IHook8141` with `preCheck()`/`postCheck()`. The `executeHooked()` function extracts the ETH value from execution calldata via `_extractExecutionValue()` and passes it as `msgValue` to `preCheck()`:
+
+```solidity
+function preCheck(address, uint256 msgValue, bytes calldata)
+    external payable override returns (bytes memory hookData) {
+    // msg.sender = kernel account (called inline from executeHooked)
+    SpendingState storage state = spendingStates[msg.sender];
+    // Reset if new day, then enforce daily limit
+    uint256 available = state.dailyLimit - state.spentToday;
+    if (msgValue > available) revert DailyLimitExceeded(msgValue, available);
+    state.spentToday += msgValue;
+    return abi.encode(msgValue);
+}
 ```
 
-**Where hooks are still kernel-orchestrated:**
-- `executeFromExecutor()` — executor modules call through the kernel, which applies pre/post hooks
-- `fallback()` — selector-routed fallback calls apply hooks from the fallback config
+The hook also retains a deprecated `check()` function for the legacy DEFAULT frame pattern.
 
-These paths retain kernel-orchestrated hooks because executors and fallback callers don't construct frame transactions.
+**Executor and fallback hooks** — `executeFromExecutor()` and `fallback()` also call `preCheck()`/`postCheck()` inline, using the same hook interface. All hook execution is kernel-orchestrated.
 
 #### Enable Mode (VERIFY + DEFAULT Split)
 
@@ -284,33 +293,64 @@ bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
 require(vs.allowedSelectors[vId][senderSelector], "selector not allowed");
 ```
 
-**Policy context** — Policies receive `senderFrameIndex` and can read any execution parameter:
+**Policy context** — Policies receive `senderFrameIndex` in the VERIFY phase and can read any execution parameter:
 ```solidity
-function checkFrameTxPolicy(address account, bytes32 sigHash, uint256 senderFrameIdx, ...)
-  -> frameDataLoad(senderFrameIdx, offset)  // read target, value, calldata
+function checkFrameTxPolicy(bytes32 id, address account, bytes32 sigHash, uint256 senderFrameIndex)
+    external view returns (uint256 result);
+  // -> frameDataLoad(senderFrameIndex, offset)  // read target, value, calldata
 ```
 
-**Hook value extraction** — Hooks read execution value from the SENDER frame without the account passing it:
+**Hook enforcement** — VERIFY reads the SENDER frame's selector and vId to enforce `executeHooked()`:
 ```solidity
-uint256 value = uint256(FrameTxLib.frameDataLoad(senderIdx, 120));  // SINGLE exec value
+bytes4 senderSelector = bytes4(FrameTxLib.frameDataLoad(senderFrameIdx, 0));
+require(senderSelector == this.executeHooked.selector);
+bytes21 senderVId = bytes21(FrameTxLib.frameDataLoad(senderFrameIdx, 4));
+require(senderVId == ValidationId.unwrap(vId));
+```
+
+#### Two-Phase Policy Model
+
+Policies use a split interface to work across EIP-8141's read-only VERIFY and stateful SENDER frames:
+
+| Phase | Function | Context | Purpose |
+|-------|----------|---------|---------|
+| VERIFY | `checkFrameTxPolicy(id, account, sigHash, senderFrameIndex)` | `view` (STATICCALL) | Read-only validation |
+| SENDER | `consumeFrameTxPolicy(id, account)` | stateful | State writes (e.g. budget decrement) |
+
+Read-only policies (e.g. `SelectorPolicy8141`) implement `consumeFrameTxPolicy()` as a no-op. Stateful policies (e.g. `GasPolicy8141`) perform writes only in the SENDER phase. `_consumeStatefulPolicies()` is called at the start of `executeHooked()` for permission-based validations.
+
+**GasPolicy8141 example:**
+```solidity
+// VERIFY phase: read-only budget check
+function checkFrameTxPolicy(bytes32 id, address, bytes32, uint256) external view returns (uint256) {
+    return FrameTxLib.maxCost() > budgets[msg.sender][id].allowed ? 1 : 0;
+}
+
+// SENDER phase: budget decrement
+function consumeFrameTxPolicy(bytes32 id, address account) external {
+    uint256 maxCost = FrameTxLib.maxCost();
+    budgets[account][id].allowed -= uint128(maxCost);
+}
 ```
 
 #### Design Constraints and Trade-offs
 
-**Mempool VERIFY simulation:** The framepool only executes VERIFY frames during transaction validation. DEFAULT frames are skipped, and their `FrameResults` are zero-initialized. This means `_verifyHookFrames()` cannot check `frameStatus()` for DEFAULT hook frames — it can only verify structural presence (correct target and mode).
+**Inline hooks are atomic.** Since hooks run inside the SENDER frame via `executeHooked()`, hook pre/post checks and execution are atomic — if the hook reverts, execution reverts, and vice versa. This resolves the non-atomicity issue of the earlier DEFAULT frame hook model.
 
-**No atomicity between DEFAULT and SENDER frames:** Each frame is an independent execution context. If a DEFAULT hook frame succeeds (records spending) but the SENDER frame reverts, the spending record persists. Conversely, if the hook reverts, the SENDER frame still executes (since VERIFY already approved). This is analogous to gas prepayment — the hook's state change is committed regardless of execution outcome.
+**Mempool VERIFY simulation:** The framepool only executes VERIFY frames during transaction validation. VERIFY enforcement of `executeHooked()` is a structural check via `frameDataLoad()` — it reads the SENDER frame's selector and vId without executing it.
 
 **Transient storage discarded between frames:** `tstore`/`tload` values do not persist across frame boundaries. SENDER frames cannot read transient storage set by VERIFY frames. Instead, SENDER frames derive hook and validation context from persistent storage reads.
 
-**Fallback and executor hooks remain kernel-orchestrated:** Only `execute()` and `validatedCall()` use frame-native hooks. `executeFromExecutor()` and `fallback()` still call `hook.preCheck()`/`hook.postCheck()` directly, because these entry points are not reached via frame transactions.
+**Policy state writes require SENDER frame:** VERIFY frames are read-only (`sstore` causes exceptional halt). Stateful policies like `GasPolicy8141` can only decrement budgets in the SENDER frame via `consumeFrameTxPolicy()`, which is why `_enforcePermissionExecution()` always requires `executeHooked()`.
 
 #### Bundled Modules
 
 - `ECDSAValidator` — ECDSA signature validation via native `ecrecover` (Solady's `ECDSA.recover` is incompatible with the EIP-8141 custom compiler + `via_ir`)
 - `SessionKeyValidator` — session key with time-bound validity and policy enforcement
-- `SpendingLimitHook` — daily spending limit as frame-native DEFAULT target + IHook8141 fallback
+- `SpendingLimitHook` — daily spending limit as inline hook (`IHook8141` `preCheck`/`postCheck`)
 - `SessionKeyPermissionHook` — session key permission checking with self-contained spending tracking
+- `GasPolicy8141` — stateful gas budget policy (two-phase `IPolicy8141`: check in VERIFY, consume in SENDER)
+- `SelectorPolicy8141` — read-only selector whitelist policy (`IPolicy8141`)
 - `DefaultExecutor` / `BatchExecutor` — single and batch execution modules
 
 #### Kernel v3 vs Kernel8141
@@ -319,13 +359,13 @@ uint256 value = uint256(FrameTxLib.frameDataLoad(senderIdx, 120));  // SINGLE ex
 |---|---|---|
 | Signature hash | Computed from UserOp struct | Protocol-provided `sigHash` via TXPARAM |
 | Selector ACL | Decode from `userOp.callData` | `frameDataLoad()` cross-frame read |
-| Hook execution | Account orchestrates `preCheck`/`postCheck` | Hook runs in independent DEFAULT frame |
-| Hook enforcement | Account always calls hook | VERIFY structurally verifies hook frame exists |
+| Hook execution | Account orchestrates `preCheck`/`postCheck` | Same — inline `preCheck`/`postCheck` via `executeHooked()` |
+| Hook enforcement | Account always calls hook | VERIFY enforces `executeHooked` selector via `_enforceHookedExecution()` |
 | Enable mode | Single `validateUserOp` call (sstore during validation) | Split: VERIFY (sig verify) + DEFAULT (sstore) |
-| `execute()` | Derives hook, calls preCheck/execute/postCheck | Direct execution, no hook calls |
-| Policy context | Limited to UserOp fields | `senderFrameIndex` + `frameDataLoad()` for full execution context |
+| `execute()` | Derives hook, calls preCheck/execute/postCheck | `execute()` for no-hook; `executeHooked()` for hooked execution |
+| Policy model | Limited to UserOp fields | Two-phase: `checkFrameTxPolicy` (VERIFY) + `consumeFrameTxPolicy` (SENDER) |
 | Post-op | Gas tracking + refund logic | Not applicable (no `actualGasCost` available) |
-| Atomicity | Hook + execution in single call (atomic) | Hook and execution in separate frames (non-atomic) |
+| Atomicity | Hook + execution in single call (atomic) | Same — hook + execution atomic in SENDER frame |
 
 ---
 
