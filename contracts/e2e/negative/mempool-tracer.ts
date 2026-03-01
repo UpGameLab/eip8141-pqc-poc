@@ -12,24 +12,26 @@
 import {
   encodeAbiParameters,
   parseAbiParameters,
-  getContractAddress,
   hexToBytes,
-  formatEther,
+  bytesToHex,
+  parseSignature,
   type Hex,
   type Address,
 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import {
+  computeSigHash,
+  serializeFrameTransaction,
+  type TransactionSerializableFrame,
+} from "viem/eip8141";
 import {
   CHAIN_ID,
   DEV_KEY,
   OWNER2_KEY,
   DEAD_ADDR,
-  FRAME_MODE_VERIFY,
-  FRAME_MODE_SENDER,
 } from "../helpers/config.js";
-import { createTestClients, waitForReceipt, fundAccount } from "../helpers/client.js";
+import { createTestClients, fundAccount } from "../helpers/client.js";
 import { loadBytecode, deployContract } from "../helpers/deploy.js";
-import { computeSigHash, encodeFrameTx, type FrameTxParams } from "../helpers/frame-tx.js";
-import { signFrameHash } from "../helpers/signing.js";
 import { expectRpcRejection } from "../helpers/expect.js";
 import {
   MALICIOUS_VALIDATE_TIMESTAMP,
@@ -41,7 +43,6 @@ import {
   MALICIOUS_VALIDATE_EXTCODE_NO_CODE,
   MALICIOUS_VALIDATE_GAS_NOT_CALL,
   MALICIOUS_VALIDATE_EXTERNAL_STORAGE,
-  MALICIOUS_VALIDATE,
   NO_APPROVE_VALIDATE,
 } from "../helpers/abis/malicious.js";
 import { SIMPLE_VALIDATE_SELECTOR } from "../helpers/abis/simple.js";
@@ -50,7 +51,6 @@ import {
   sectionHeader,
   info,
   step,
-  success,
   testHeader,
   testPassed,
   summary,
@@ -67,22 +67,21 @@ import {
  */
 function buildFrameTxParams(
   sender: Address,
-  nonce: bigint,
+  nonce: number,
   gasFeeCap: bigint,
   verifyGasLimit = 200_000n
-): FrameTxParams {
+): TransactionSerializableFrame {
   return {
-    chainId: BigInt(CHAIN_ID),
+    chainId: CHAIN_ID,
     nonce,
     sender,
-    gasTipCap: 1_000_000_000n,
-    gasFeeCap,
+    maxPriorityFeePerGas: 1_000_000_000n,
+    maxFeePerGas: gasFeeCap,
     frames: [
-      { mode: FRAME_MODE_VERIFY, target: null, gasLimit: verifyGasLimit, data: new Uint8Array(0) },
-      { mode: FRAME_MODE_SENDER, target: DEAD_ADDR as Address | null, gasLimit: 50_000n, data: new Uint8Array(0) },
+      { mode: 'verify', target: null, gasLimit: verifyGasLimit, data: '0x' },
+      { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
     ],
-    blobFeeCap: 0n,
-    blobHashes: [],
+    type: 'frame',
   };
 }
 
@@ -90,7 +89,7 @@ function buildFrameTxParams(
  * Encode validate calldata with 3-arg selector: selector(v, r, s)
  * Used for most MaliciousValidator validate_* functions.
  */
-function encodeValidate3(selector: string, v: number, r: bigint, s: bigint): Uint8Array {
+function encodeValidate3(selector: string, v: number, r: bigint, s: bigint): Hex {
   const selectorBytes = hexToBytes(selector as Hex);
   const calldata = new Uint8Array(4 + 32 * 3);
   calldata.set(selectorBytes, 0);
@@ -102,14 +101,14 @@ function encodeValidate3(selector: string, v: number, r: bigint, s: bigint): Uin
   // s
   const sHex = s.toString(16).padStart(64, "0");
   calldata.set(hexToBytes(("0x" + sHex) as Hex), 68);
-  return calldata;
+  return bytesToHex(calldata);
 }
 
 /**
  * Encode validate calldata with 4-arg selector: selector(v, r, s, scope)
  * Used for MaliciousValidator.validate and Simple8141Account.validate.
  */
-function encodeValidate4(selector: string, v: number, r: bigint, s: bigint, scope: number): Uint8Array {
+function encodeValidate4(selector: string, v: number, r: bigint, s: bigint, scope: number): Hex {
   const selectorBytes = hexToBytes(selector as Hex);
   const calldata = new Uint8Array(4 + 32 * 4);
   calldata.set(selectorBytes, 0);
@@ -119,7 +118,7 @@ function encodeValidate4(selector: string, v: number, r: bigint, s: bigint, scop
   const sHex = s.toString(16).padStart(64, "0");
   calldata.set(hexToBytes(("0x" + sHex) as Hex), 68);
   calldata[131] = scope;
-  return calldata;
+  return bytesToHex(calldata);
 }
 
 /**
@@ -131,7 +130,7 @@ function encodeValidateExternalStorage(
   r: bigint,
   s: bigint,
   target: Address
-): Uint8Array {
+): Hex {
   const selectorBytes = hexToBytes(selector as Hex);
   const calldata = new Uint8Array(4 + 32 * 4);
   calldata.set(selectorBytes, 0);
@@ -143,7 +142,7 @@ function encodeValidateExternalStorage(
   // target address in last 20 bytes of 4th word
   const targetBytes = hexToBytes(target as Hex);
   calldata.set(targetBytes, 100 + 12); // offset 100 + 12 bytes padding
-  return calldata;
+  return bytesToHex(calldata);
 }
 
 /**
@@ -151,15 +150,20 @@ function encodeValidateExternalStorage(
  */
 async function sendExpectingRejection(
   publicClient: any,
-  params: FrameTxParams,
+  params: TransactionSerializableFrame,
   privKey: Hex,
-  calldataBuilder: (v: number, r: bigint, s: bigint) => Uint8Array,
+  calldataBuilder: (v: number, r: bigint, s: bigint) => Hex,
   expectedError?: string
 ): Promise<string> {
   const sigHash = computeSigHash(params);
-  const { r, s, v } = signFrameHash(sigHash, privKey);
+  const account = privateKeyToAccount(privKey);
+  const sig = await account.sign({ hash: sigHash });
+  const { r: rHex, s: sHex, yParity } = parseSignature(sig);
+  const v = yParity;
+  const r = BigInt(rHex);
+  const s = BigInt(sHex);
   params.frames[0].data = calldataBuilder(v, r, s);
-  const rawTx = encodeFrameTx(params);
+  const rawTx = serializeFrameTransaction(params);
 
   return expectRpcRejection(async () => {
     await publicClient.request({
@@ -223,7 +227,7 @@ async function main() {
 
   // Helper to get nonce + gasFeeCap for an account
   async function getContext(sender: Address) {
-    const nonce = BigInt(await publicClient.getTransactionCount({ address: sender }));
+    const nonce = await publicClient.getTransactionCount({ address: sender });
     const block = await publicClient.getBlock();
     const gasFeeCap = block.baseFeePerGas! + 2_000_000_000n;
     return { nonce, gasFeeCap };
@@ -399,11 +403,16 @@ async function main() {
     const ctx = await getContext(maliciousAddr);
     const params = buildFrameTxParams(maliciousAddr, ctx.nonce, ctx.gasFeeCap);
     const sigHash = computeSigHash(params);
-    const { r, s, v } = signFrameHash(sigHash, DEV_KEY);
+    const account = privateKeyToAccount(DEV_KEY);
+    const sig = await account.sign({ hash: sigHash });
+    const { r: rHex, s: sHex, yParity } = parseSignature(sig);
+    const v = yParity;
+    const r = BigInt(rHex);
+    const s = BigInt(sHex);
     params.frames[0].data = encodeValidateExternalStorage(
       MALICIOUS_VALIDATE_EXTERNAL_STORAGE, v, r, s, storageOracleAddr
     );
-    const rawTx = encodeFrameTx(params);
+    const rawTx = serializeFrameTransaction(params);
     const msg = await expectRpcRejection(async () => {
       await publicClient.request({
         method: "eth_sendRawTransaction" as any,

@@ -14,20 +14,24 @@ import {
   encodeAbiParameters,
   parseAbiParameters,
   hexToBytes,
+  bytesToHex,
+  parseSignature,
   type Hex,
   type Address,
 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import {
+  computeSigHash,
+  serializeFrameTransaction,
+  type TransactionSerializableFrame,
+} from "viem/eip8141";
 import {
   CHAIN_ID,
   DEV_KEY,
   DEAD_ADDR,
-  FRAME_MODE_VERIFY,
-  FRAME_MODE_SENDER,
 } from "../helpers/config.js";
 import { createTestClients, fundAccount } from "../helpers/client.js";
 import { loadBytecode, deployContract } from "../helpers/deploy.js";
-import { computeSigHash, encodeFrameTx, type FrameTxParams } from "../helpers/frame-tx.js";
-import { signFrameHash } from "../helpers/signing.js";
 import { expectRpcRejection } from "../helpers/expect.js";
 import { SIMPLE_VALIDATE_SELECTOR } from "../helpers/abis/simple.js";
 import {
@@ -43,7 +47,7 @@ import {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function encodeValidate(v: number, r: bigint, s: bigint, scope: number): Uint8Array {
+function encodeValidate(v: number, r: bigint, s: bigint, scope: number): Hex {
   const selectorBytes = hexToBytes(SIMPLE_VALIDATE_SELECTOR as Hex);
   const calldata = new Uint8Array(4 + 32 * 4);
   calldata.set(selectorBytes, 0);
@@ -53,7 +57,7 @@ function encodeValidate(v: number, r: bigint, s: bigint, scope: number): Uint8Ar
   const sHex = s.toString(16).padStart(64, "0");
   calldata.set(hexToBytes(("0x" + sHex) as Hex), 68);
   calldata[131] = scope;
-  return calldata;
+  return bytesToHex(calldata);
 }
 
 /**
@@ -61,18 +65,23 @@ function encodeValidate(v: number, r: bigint, s: bigint, scope: number): Uint8Ar
  */
 async function sendExpectingRejection(
   publicClient: any,
-  params: FrameTxParams,
+  params: TransactionSerializableFrame,
   verifyFrameIndices: { index: number; scope: number }[],
   expectedError?: string
 ): Promise<string> {
   const sigHash = computeSigHash(params);
-  const { r, s, v } = signFrameHash(sigHash, DEV_KEY);
+  const account = privateKeyToAccount(DEV_KEY);
+  const sig = await account.sign({ hash: sigHash });
+  const { r: rHex, s: sHex, yParity } = parseSignature(sig);
+  const v = yParity;
+  const r = BigInt(rHex);
+  const s = BigInt(sHex);
 
   for (const { index, scope } of verifyFrameIndices) {
     params.frames[index].data = encodeValidate(v, r, s, scope);
   }
 
-  const rawTx = encodeFrameTx(params);
+  const rawTx = serializeFrameTransaction(params);
   return expectRpcRejection(async () => {
     await publicClient.request({
       method: "eth_sendRawTransaction" as any,
@@ -105,7 +114,7 @@ async function main() {
   await fundAccount(walletClient, publicClient, accountAddr);
 
   async function getContext() {
-    const nonce = BigInt(await publicClient.getTransactionCount({ address: accountAddr }));
+    const nonce = await publicClient.getTransactionCount({ address: accountAddr });
     const block = await publicClient.getBlock();
     const gasFeeCap = block.baseFeePerGas! + 2_000_000_000n;
     return { nonce, gasFeeCap };
@@ -117,18 +126,17 @@ async function main() {
   testHeader(1, "SENDER frame before VERIFY approval");
   try {
     const ctx = await getContext();
-    const params: FrameTxParams = {
-      chainId: BigInt(CHAIN_ID),
+    const params: TransactionSerializableFrame = {
+      chainId: CHAIN_ID,
       nonce: ctx.nonce,
       sender: accountAddr,
-      gasTipCap: 1_000_000_000n,
-      gasFeeCap: ctx.gasFeeCap,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      maxFeePerGas: ctx.gasFeeCap,
       frames: [
-        { mode: FRAME_MODE_SENDER, target: DEAD_ADDR as Address | null, gasLimit: 50_000n, data: new Uint8Array(0) },
-        { mode: FRAME_MODE_VERIFY, target: null, gasLimit: 200_000n, data: new Uint8Array(0) },
+        { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
+        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
       ],
-      blobFeeCap: 0n,
-      blobHashes: [],
+      type: 'frame',
     };
 
     const msg = await sendExpectingRejection(
@@ -149,18 +157,17 @@ async function main() {
   testHeader(2, "Payment approval before execution approval");
   try {
     const ctx = await getContext();
-    const params: FrameTxParams = {
-      chainId: BigInt(CHAIN_ID),
+    const params: TransactionSerializableFrame = {
+      chainId: CHAIN_ID,
       nonce: ctx.nonce,
       sender: accountAddr,
-      gasTipCap: 1_000_000_000n,
-      gasFeeCap: ctx.gasFeeCap,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      maxFeePerGas: ctx.gasFeeCap,
       frames: [
-        { mode: FRAME_MODE_VERIFY, target: null, gasLimit: 200_000n, data: new Uint8Array(0) },
-        { mode: FRAME_MODE_SENDER, target: DEAD_ADDR as Address | null, gasLimit: 50_000n, data: new Uint8Array(0) },
+        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
-      blobFeeCap: 0n,
-      blobHashes: [],
+      type: 'frame',
     };
 
     const msg = await sendExpectingRejection(
@@ -181,18 +188,17 @@ async function main() {
   testHeader(3, "Missing payment approval (execution only)");
   try {
     const ctx = await getContext();
-    const params: FrameTxParams = {
-      chainId: BigInt(CHAIN_ID),
+    const params: TransactionSerializableFrame = {
+      chainId: CHAIN_ID,
       nonce: ctx.nonce,
       sender: accountAddr,
-      gasTipCap: 1_000_000_000n,
-      gasFeeCap: ctx.gasFeeCap,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      maxFeePerGas: ctx.gasFeeCap,
       frames: [
-        { mode: FRAME_MODE_VERIFY, target: null, gasLimit: 200_000n, data: new Uint8Array(0) },
-        { mode: FRAME_MODE_SENDER, target: DEAD_ADDR as Address | null, gasLimit: 50_000n, data: new Uint8Array(0) },
+        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
-      blobFeeCap: 0n,
-      blobHashes: [],
+      type: 'frame',
     };
 
     const msg = await sendExpectingRejection(
@@ -213,19 +219,18 @@ async function main() {
   testHeader(4, "Double execution approval");
   try {
     const ctx = await getContext();
-    const params: FrameTxParams = {
-      chainId: BigInt(CHAIN_ID),
+    const params: TransactionSerializableFrame = {
+      chainId: CHAIN_ID,
       nonce: ctx.nonce,
       sender: accountAddr,
-      gasTipCap: 1_000_000_000n,
-      gasFeeCap: ctx.gasFeeCap,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      maxFeePerGas: ctx.gasFeeCap,
       frames: [
-        { mode: FRAME_MODE_VERIFY, target: null, gasLimit: 200_000n, data: new Uint8Array(0) },
-        { mode: FRAME_MODE_VERIFY, target: null, gasLimit: 200_000n, data: new Uint8Array(0) },
-        { mode: FRAME_MODE_SENDER, target: DEAD_ADDR as Address | null, gasLimit: 50_000n, data: new Uint8Array(0) },
+        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
-      blobFeeCap: 0n,
-      blobHashes: [],
+      type: 'frame',
     };
 
     const msg = await sendExpectingRejection(
@@ -268,21 +273,20 @@ async function main() {
     // Fund account
     await fundAccount(walletClient, publicClient, innerAddr);
 
-    const innerNonce = BigInt(await publicClient.getTransactionCount({ address: innerAddr }));
+    const innerNonce = await publicClient.getTransactionCount({ address: innerAddr });
     const innerBlock = await publicClient.getBlock();
     const innerGasFeeCap = innerBlock.baseFeePerGas! + 2_000_000_000n;
-    const params: FrameTxParams = {
-      chainId: BigInt(CHAIN_ID),
+    const params: TransactionSerializableFrame = {
+      chainId: CHAIN_ID,
       nonce: innerNonce,
       sender: innerAddr,
-      gasTipCap: 1_000_000_000n,
-      gasFeeCap: innerGasFeeCap,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      maxFeePerGas: innerGasFeeCap,
       frames: [
-        { mode: FRAME_MODE_VERIFY, target: null, gasLimit: 200_000n, data: new Uint8Array(0) },
-        { mode: FRAME_MODE_SENDER, target: DEAD_ADDR as Address | null, gasLimit: 50_000n, data: new Uint8Array(0) },
+        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
-      blobFeeCap: 0n,
-      blobHashes: [],
+      type: 'frame',
     };
 
     const msg = await sendExpectingRejection(
