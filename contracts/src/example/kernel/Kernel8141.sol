@@ -374,14 +374,12 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         _enforcePermissionExecution(vId, senderFrameIdx);
 
         ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, actualSig);
-        // Parse full ValidationData: result + time bounds from policies/signer.
-        // _intersectValidationData merges time bounds (MAX validAfter, MIN validUntil)
-        // across all policies and the signer.
-        (ValidAfter validAfter, ValidUntil validUntil, address result) =
+        // Parse ValidationData: extract only the result (signature validity).
+        // Time bounds (validAfter/validUntil) are NOT checked here because
+        // VERIFY frames cannot use TIMESTAMP opcode (OP-011).
+        (, , address result) =
             parseValidationData(ValidationData.unwrap(vd));
         if (result != address(0)) revert InvalidSignature();
-        if (block.timestamp < ValidAfter.unwrap(validAfter)) revert NotYetValid();
-        if (block.timestamp > ValidUntil.unwrap(validUntil)) revert Expired();
 
         FrameTxLib.approveEmpty(scope);
     }
