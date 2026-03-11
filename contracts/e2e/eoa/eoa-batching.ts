@@ -13,7 +13,6 @@
 
 import { formatEther, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { toEoaFrameAccount } from "viem/eip8141";
 import { DEV_KEY, DEAD_ADDR } from "../helpers/config.js";
 import { createTestClients, waitForReceipt } from "../helpers/client.js";
 import {
@@ -33,12 +32,8 @@ async function main() {
   // ── Test 1: Batch 3 ETH transfers in one frame tx ──
   testHeader(1, "Batch 3 ETH transfers via default code");
 
-  const account = toEoaFrameAccount({
-    owner,
-    verifyGasLimit: 100_000n,
-    senderGasLimit: 200_000n,
-    scope: 2,
-  });
+  // LocalAccount passed directly — auto-wrapped to toEoaFrameAccount internally
+  const account = owner;
 
   const targets = [
     "0x0000000000000000000000000000000000000001",

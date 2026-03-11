@@ -14,7 +14,6 @@
 
 import { formatEther, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { toEoaFrameAccount } from "viem/eip8141";
 import type { FramePaymaster } from "viem/eip8141";
 import { DEV_KEY, SECOND_OWNER_KEY, DEAD_ADDR } from "../helpers/config.js";
 import { createTestClients, waitForReceipt, fundAccount } from "../helpers/client.js";
@@ -60,13 +59,8 @@ async function main() {
   // ── Test: Sponsored EOA transaction ──
   testHeader(1, "EOA tx with gas sponsoring (no tokens)");
 
-  // User's EOA account — scope=0 (execution only, sponsor pays gas)
-  const account = toEoaFrameAccount({
-    owner: user,
-    verifyGasLimit: 100_000n,
-    senderGasLimit: 100_000n,
-    scope: 0,
-  });
+  // LocalAccount passed directly — scope=0 means sponsor pays gas
+  const account = user;
 
   // Sponsor paymaster — signs the sigHash to authorize gas payment
   const { encodeFunctionData } = await import("viem");
@@ -101,6 +95,7 @@ async function main() {
     account,
     paymaster,
     calls: [{ to: DEAD_ADDR }],
+    scope: 0,  // execution only — sponsor pays gas
   });
 
   const receipt = await waitForReceipt(publicClient, txHash);
