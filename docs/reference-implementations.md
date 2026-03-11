@@ -1,6 +1,6 @@
 # Reference Implementations
 
-This repository contains six smart contract implementations demonstrating EIP-8141 frame transactions: three standalone contracts and three ports of production ERC-4337 accounts.
+This repository contains six smart contract implementations, three ports of production ERC-4337 accounts, a post-quantum ML-DSA account, and EOA default code support — demonstrating EIP-8141 frame transactions across the full spectrum of account types.
 
 ## FrameTxLib
 
@@ -366,6 +366,60 @@ function consumeFrameTxPolicy(bytes32 id, address account) external {
 | Policy model | Limited to UserOp fields | Two-phase: `checkFrameTxPolicy` (VERIFY) + `consumeFrameTxPolicy` (SENDER) |
 | Post-op | Gas tracking + refund logic | Not applicable (no `actualGasCost` available) |
 | Atomicity | Hook + execution in single call (atomic) | Same — hook + execution atomic in SENDER frame |
+
+---
+
+## MLDSA8141Account (Post-Quantum)
+
+`contracts/src/example/mldsa/MLDSA8141Account.sol` (~104 lines)
+
+Post-quantum smart account using ML-DSA (FIPS 204) signatures via the `VERIFY_MLDSA_ETH` precompile at `0x13` (EIP-8051, Keccak PRNG variant).
+
+**Public key storage (SSTORE2):** The expanded public key is 20,512 bytes. Instead of 641 storage slots, the key is stored as contract bytecode in a separate data contract. Verification loads it via `EXTCODECOPY`, avoiding per-slot overhead.
+
+**Precompile input:**
+
+| Component | Size |
+|-----------|------|
+| Message (sigHash) | 32 bytes |
+| Signature | 2,420 bytes |
+| Expanded PK | 20,512 bytes |
+| **Total** | **22,964 bytes** |
+
+**Frame pattern:**
+```
+Frame 0: VERIFY(account)  → validate(signature, scope) → APPROVE
+Frame 1: SENDER(target)   → execute(target, value, data)
+```
+
+The validation function loads sigHash via TXPARAMLOAD, copies the signature from calldata, loads the PK via EXTCODECOPY, and makes a single `staticcall` to the ML-DSA precompile. No dependencies beyond `FrameTxLib`.
+
+---
+
+## EOA Default Code
+
+EIP-8141 defines default code behavior for accounts with no deployed code, enabling EOAs to use frame transactions without deploying a smart contract. Implementation references [ZeroDev Derek's PR](https://github.com/ethereum/EIPs/pull/9578).
+
+**VERIFY mode** (first byte low nibble = `0x1`):
+- High nibble = APPROVE scope (`0x0` execution, `0x1` payment, `0x2` both)
+- Second byte = signature type (`0x00` ECDSA, `0x01` P256)
+- Verifies signature against `keccak256(sigHash || data_without_signature)`
+
+**SENDER mode** (first byte low nibble = `0x2`):
+- Rest of data is RLP-encoded call list: `[[target, value, data], ...]`
+- Executes each call sequentially, reverts the frame if any call fails
+
+**DEFAULT mode**: always reverts.
+
+**Supported patterns:**
+
+| Pattern | Frames | Description |
+|---------|--------|-------------|
+| Batching | VERIFY(ECDSA) + SENDER(RLP batch) | Multiple calls in one tx |
+| Sponsoring | VERIFY(sender, scope=0) + VERIFY(sponsor) + SENDER | Separate execution/payment approval |
+| P256 | VERIFY(P256) + SENDER(RLP batch) | Passkey-style secp256r1 signing |
+
+The viem SDK treats `LocalAccount` as a first-class citizen — passing it directly to `sendFrameTransaction` builds EOA default code frames automatically. P256 signatures require explicit wrapping via `toEoaFrameAccount({ signatureType: 'p256' })`.
 
 ---
 

@@ -123,6 +123,16 @@ Frame 3: SENDER(account)    -> account.execute(target, value, data)
 Frame 4: DEFAULT(paymaster) -> postOp()
 ```
 
+## EOA Default Code
+
+When a frame targets an address with no deployed code, the protocol executes built-in default code logic based on the first byte of `frame.data`:
+
+- **VERIFY** (low nibble `0x1`): High nibble encodes APPROVE scope. Second byte selects signature type (`0x00` ECDSA, `0x01` P256). Verifies the signature against `keccak256(sigHash || data_without_signature)`.
+- **SENDER** (low nibble `0x2`): Remaining data is RLP-encoded `[[target, value, data], ...]`. Executes each call sequentially.
+- **DEFAULT**: Always reverts.
+
+This enables EOAs to participate in frame transactions — batching, gas sponsorship, and P256 signing — without deploying a smart contract.
+
 ## Transaction Receipt
 
 ```
