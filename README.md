@@ -31,10 +31,12 @@ A reference implementation for [EIP-8141](https://github.com/ethereum/EIPs/pull/
 │   │       │   ├── handlers/                # ERC-1271 fallback handler
 │   │       │   ├── interfaces/              # Module interfaces (IValidator, IHook, IPolicy, ...)
 │   │       │   └── types/                   # Constants, Structs, Types
-│   │       ├── coinbase-smart-wallet/        # Coinbase-style smart wallet
+│   │       ├── mldsa/                          # ML-DSA post-quantum account
+│   │       │   └── MLDSA8141Account.sol
+│   │       ├── coinbase-smart-wallet/          # Coinbase-style smart wallet
 │   │       │   ├── CoinbaseSmartWallet8141.sol
 │   │       │   └── CoinbaseSmartWalletFactory8141.sol
-│   │       └── light-account/                # Alchemy LightAccount port
+│   │       └── light-account/                  # Alchemy LightAccount port
 │   │           ├── LightAccount8141.sol
 │   │           └── LightAccountFactory8141.sol
 │   ├── test/              # Forge unit tests
@@ -123,13 +125,20 @@ make e2e-coinbase-webauthn # WebAuthn
 # LightAccount8141
 make e2e-light-account     # ECDSA
 
+# MLDSA8141Account (post-quantum)
+make e2e-mldsa             # ML-DSA signature verification
+
+# EOA Default Code
+make e2e-eoa               # all EOA tests
+make e2e-eoa-batching      # batch multiple calls
+make e2e-eoa-sponsor       # gas sponsoring via paymaster
+make e2e-eoa-p256          # P256 (passkey) signing
+
 # Negative tests (mempool/protocol constraint violations)
 make e2e-negative          # all negative tests
 make e2e-negative-mempool  # mempool tracer violations
 make e2e-negative-protocol # protocol constraint violations
 ```
-
-The full `make e2e` suite includes deploy-in-one-tx tests (Simple, Kernel, Coinbase, LightAccount), security tests, permission tests, paymaster tests, and gas benchmarks.
 
 ## Gas Benchmark
 
