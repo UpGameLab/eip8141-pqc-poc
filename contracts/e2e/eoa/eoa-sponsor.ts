@@ -95,7 +95,7 @@ async function main() {
     account,
     paymaster,
     calls: [{ to: DEAD_ADDR }],
-    scope: 0,  // execution only — sponsor pays gas
+    // scope defaults to 0 (execution-only) when paymaster is present
   });
 
   const receipt = await waitForReceipt(publicClient, txHash);
