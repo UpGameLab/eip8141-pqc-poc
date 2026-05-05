@@ -89,7 +89,7 @@ contract CoinbaseSmartWallet8141Test is Test {
 
     // NOTE: addOwnerAddress, addOwnerPublicKey, removeOwnerAtIndex, removeLastOwner,
     // validate, validateCrossChain, executeWithoutChainIdValidation
-    // require EIP-8141 TXPARAMLOAD opcode (via onlySenderFrameOrOwner or VERIFY mode)
+    // require EIP-8141 TXPARAM opcode (via onlySenderFrameOrOwner or VERIFY mode)
     // which is not available in Forge's revm. These are tested via E2E on the custom geth devnet.
 
     function test_WebAuthnOwner() public {

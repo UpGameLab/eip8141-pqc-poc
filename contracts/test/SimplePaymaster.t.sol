@@ -20,7 +20,7 @@ contract SimplePaymasterTest is Test {
     }
 
     // ── validate ─────────────────────────────────────────────────────
-    // Note: validate() relies on EIP-8141 opcodes (TXPARAMLOAD, APPROVE)
+    // Note: validate() relies on EIP-8141 opcodes (TXPARAM, APPROVE)
     // which are not available in standard forge test EVM. Full validation
     // testing requires the custom geth devnet.
 

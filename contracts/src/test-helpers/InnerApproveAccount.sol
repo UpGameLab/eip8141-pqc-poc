@@ -20,7 +20,7 @@ contract InnerApproveAccount {
 
     /// @notice Validates signature, then delegates APPROVE to the relay via STATICCALL.
     ///         The relay call will fail because ADDRESS (relay) != frame.target (this).
-    function validate(uint8 v, bytes32 r, bytes32 s, uint8 scope) external view {
+    function validate(uint8 v, bytes32 r, bytes32 s, uint8) external view {
         if (msg.sender != ENTRY_POINT) revert("not entry point");
 
         bytes32 hash = FrameTxLib.sigHash();
@@ -29,9 +29,7 @@ contract InnerApproveAccount {
 
         // Delegate APPROVE to relay via STATICCALL.
         // This must fail: relay's ADDRESS != frame.target (this account).
-        (bool ok,) = relay.staticcall(
-            abi.encodeWithSignature("relay(uint8)", scope)
-        );
+        (bool ok,) = relay.staticcall(abi.encodeWithSignature("relay(uint8)", FrameTxLib.currentFrameAllowedScope()));
         require(ok, "relay approve failed");
     }
 

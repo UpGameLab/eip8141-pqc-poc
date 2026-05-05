@@ -18,7 +18,7 @@ interface IValidator8141 is IModule8141 {
     ///      Note: Validators may modify their own storage (including transient storage)
     ///      to pass context to hooks, unlike ERC-4337's pure validation phase.
     /// @param account The account address being validated (tx.sender)
-    /// @param sigHash The canonical signature hash from TXPARAMLOAD(0x08)
+    /// @param sigHash The canonical signature hash from TXPARAM(0x08)
     /// @param signature The raw signature bytes (format depends on validator)
     /// @return valid True if the signature is valid for this account
     function validateSignature(address account, bytes32 sigHash, bytes calldata signature)

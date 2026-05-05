@@ -13,7 +13,7 @@ interface ISigner8141 is IModule8141 {
     /// @dev Called after all policies pass during permission-based validation.
     /// @param id The permission identifier (bytes32 for storage key derivation)
     /// @param account The smart account address being validated
-    /// @param sigHash The canonical signature hash from TXPARAMLOAD(0x08)
+    /// @param sigHash The canonical signature hash from TXPARAM(0x08)
     /// @param signature The raw signature bytes
     /// @return result 0 for success, 1 for failure
     function checkFrameTxSignature(bytes32 id, address account, bytes32 sigHash, bytes calldata signature)

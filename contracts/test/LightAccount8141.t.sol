@@ -251,6 +251,6 @@ contract LightAccount8141Test is Test {
         assertEq(implAddr, address(impl));
     }
 
-    // NOTE: validate() requires EIP-8141 TXPARAMLOAD opcode which is not available
+    // NOTE: validate() requires EIP-8141 TXPARAM opcode which is not available
     // in Forge's revm. It is tested via E2E on the custom geth devnet.
 }

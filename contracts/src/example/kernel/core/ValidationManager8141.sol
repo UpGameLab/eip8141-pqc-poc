@@ -321,7 +321,7 @@ abstract contract ValidationManager8141 is EIP712, SelectorManager8141, HookMana
     /// @param vMode Validation mode (DEFAULT or ENABLE)
     /// @param vId The validator/permission identifier
     /// @param account The account address being validated
-    /// @param sigHash The canonical signature hash from TXPARAMLOAD(0x08)
+    /// @param sigHash The canonical signature hash from TXPARAM(0x08)
     /// @param senderFrameIndex The index of the SENDER frame for cross-frame data
     /// @param signature The raw signature bytes
     /// @return validationData Packed validation data (validAfter, validUntil, result)

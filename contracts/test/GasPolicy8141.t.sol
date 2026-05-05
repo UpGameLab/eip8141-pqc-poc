@@ -46,7 +46,7 @@ contract GasPolicy8141Test is Test {
     }
 
     function test_consumeFrameTxPolicy_revertsWithoutEIP8141() public {
-        // consumeFrameTxPolicy uses FrameTxLib.maxCost() which calls TXPARAMLOAD,
+        // consumeFrameTxPolicy uses FrameTxLib.maxCost() which calls TXPARAM,
         // an EIP-8141 opcode unavailable in standard EVM. This reverts in unit tests.
         // Full integration testing requires E2E tests against the 8141-geth devnet.
         vm.prank(account);

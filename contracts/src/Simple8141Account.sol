@@ -9,11 +9,11 @@ import {FrameTxLib} from "./FrameTxLib.sol";
 /// @dev Supports two frame transaction patterns:
 ///
 ///   Example 1 — Simple Transaction:
-///     Frame 0: VERIFY(sender)  → validate(v, r, s, scope=2) → APPROVE(both)
+///     Frame 0: VERIFY(sender, flags=3) → validate(v, r, s) → APPROVE(both)
 ///     Frame 1: SENDER(target)  → execute(target, value, data)
 ///
 ///   Example 2 — Sponsored Transaction:
-///     Frame 0: VERIFY(sender)  → validate(v, r, s, scope=0) → APPROVE(execution)
+///     Frame 0: VERIFY(sender, flags=2) → validate(v, r, s) → APPROVE(execution)
 ///     Frame 1: VERIFY(sponsor) → sponsor.validate()          → APPROVE(payment)
 ///     Frame 2: SENDER(erc20)   → token.transfer(sponsor, fee)
 ///     Frame 3: SENDER(target)  → execute(target, value, data)
@@ -35,19 +35,19 @@ contract Simple8141Account {
     /// @param v ECDSA recovery id
     /// @param r ECDSA signature r
     /// @param s ECDSA signature s
-    /// @param scope Approval scope: 0=execution, 1=payment, 2=both
     /// @dev Calldata layout: abi.encodeWithSelector(this.validate.selector, v, r, s, scope)
-    ///      The function reads the canonical sig hash via TXPARAMLOAD(0x08),
+    ///      The scope argument is deprecated; approval scope is read from the current VERIFY frame flags.
+    ///      The function reads the canonical sig hash via TXPARAM(0x08),
     ///      recovers the signer, checks signer==owner, and calls APPROVE.
     ///      This function does NOT return — APPROVE terminates execution like RETURN.
-    function validate(uint8 v, bytes32 r, bytes32 s, uint8 scope) external view {
+    function validate(uint8 v, bytes32 r, bytes32 s, uint8) external view {
         if (msg.sender != ENTRY_POINT) revert InvalidCaller();
 
         bytes32 hash = FrameTxLib.sigHash();
         address signer = ecrecover(hash, v, r, s);
         if (signer != owner || signer == address(0)) revert InvalidSignature();
 
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     /// @notice Execution entry point, called in a SENDER frame.

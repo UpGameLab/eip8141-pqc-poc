@@ -51,8 +51,8 @@ contract MLDSA8141Account {
 
     /// @notice Validation entry point, called in a VERIFY frame.
     /// @param signature ML-DSA-ETH signature (2,420 bytes: c_tilde + z + h).
-    /// @param scope Approval scope: 0=execution, 1=payment, 2=both.
-    function validate(bytes calldata signature, uint8 scope) external view {
+    /// @dev The legacy scope argument is ignored; approval scope is read from the current VERIFY frame flags.
+    function validate(bytes calldata signature, uint8) external view {
         if (msg.sender != ENTRY_POINT) revert InvalidCaller();
         if (signature.length != SIG_SIZE) revert InvalidSignature();
 
@@ -86,7 +86,7 @@ contract MLDSA8141Account {
             }
         }
 
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     /// @notice Execution entry point, called in a SENDER frame.

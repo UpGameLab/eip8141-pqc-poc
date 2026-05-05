@@ -18,7 +18,7 @@ interface IPolicy8141 is IModule8141 {
     ///      to read SENDER frame's target, value, and calldata.
     /// @param id The permission identifier (bytes32 for storage key derivation)
     /// @param account The smart account address being validated
-    /// @param sigHash The canonical signature hash from TXPARAMLOAD(0x08)
+    /// @param sigHash The canonical signature hash from TXPARAM(0x08)
     /// @param senderFrameIndex The index of the SENDER frame for cross-frame reading
     /// @return result 0 for success, 1 for failure (matches ERC-4337 convention)
     function checkFrameTxPolicy(bytes32 id, address account, bytes32 sigHash, uint256 senderFrameIndex)

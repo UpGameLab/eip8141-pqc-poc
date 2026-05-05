@@ -12,11 +12,11 @@ import {MODULE_TYPE_POLICY} from "../types/Constants8141.sol";
 ///      - SENDER phase (consumeFrameTxPolicy): budget decrement (state write)
 ///
 ///      Uses FrameTxLib.maxCost() to read the worst-case transaction cost from
-///      TXPARAMLOAD(0x06), which is available in both VERIFY and SENDER frames.
+///      TXPARAM(0x06), which is available in both VERIFY and SENDER frames.
 ///
 ///      ERC-7562 compliance:
 ///        - checkFrameTxPolicy reads budgets[msg.sender][id] — sender-associated storage (STO-021)
-///        - FrameTxLib.maxCost() uses TXPARAMLOAD — not a banned opcode
+///        - FrameTxLib.maxCost() uses TXPARAM — not a banned opcode
 contract GasPolicy8141 is IPolicy8141 {
     struct GasBudget {
         uint128 allowed;   // remaining budget in wei

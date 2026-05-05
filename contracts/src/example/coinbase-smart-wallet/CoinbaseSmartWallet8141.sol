@@ -108,7 +108,7 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
     // ── Validation (VERIFY Frame) ─────────────────────────────────────
 
     /// @notice Validate frame transaction signature (VERIFY frame).
-    function validate(bytes calldata signature, uint8 scope) external {
+    function validate(bytes calldata signature, uint8) external {
         if (FrameTxLib.currentFrameMode() != FRAME_MODE_VERIFY) {
             revert InvalidFrameMode();
         }
@@ -120,13 +120,13 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
             revert Unauthorized();
         }
 
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     /// @notice Validate a cross-chain frame transaction (VERIFY frame).
     /// @dev Computes a chain-agnostic hash from the SENDER frame calldata.
     ///      The SENDER frame must call executeWithoutChainIdValidation().
-    function validateCrossChain(bytes calldata signature, uint8 scope) external {
+    function validateCrossChain(bytes calldata signature, uint8) external {
         if (FrameTxLib.currentFrameMode() != FRAME_MODE_VERIFY) {
             revert InvalidFrameMode();
         }
@@ -149,7 +149,7 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
             revert Unauthorized();
         }
 
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     // ── Execution (SENDER Frame) ──────────────────────────────────────
@@ -520,7 +520,7 @@ contract CoinbaseSmartWallet8141 is UUPSUpgradeable, Receiver {
         for (idx = current + 1; idx < count; idx++) {
             if (
                 FrameTxLib.frameMode(idx) == FRAME_MODE_SENDER
-                    && FrameTxLib.frameTarget(idx) == address(this)
+                    && FrameTxLib.frameResolvedTarget(idx) == address(this)
             ) {
                 return idx;
             }

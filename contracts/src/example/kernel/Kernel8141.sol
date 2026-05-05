@@ -213,7 +213,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
 
     /// @notice Root validator validation. Called during VERIFY frame.
     /// @dev Verifies signature. If hook is configured, enforces SENDER frame calls executeHooked().
-    function validate(bytes calldata sig, uint8 scope) external {
+    function validate(bytes calldata sig, uint8) external {
         _requireVerifyFrame();
         ValidationStorage storage vs = _validationStorage();
         ValidationId vId = vs.rootValidator;
@@ -223,11 +223,11 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         ValidationData vd = _validateFrameTx(VALIDATION_MODE_DEFAULT, vId, account, sigHash, senderFrameIdx, sig);
         if (ValidationData.unwrap(vd) != 0) revert InvalidSignature();
         _enforceHookedExecution(vId, senderFrameIdx);
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     /// @notice Non-root validator validation. sigHash binds to SENDER frame calldata.
-    function validateFromSenderFrame(bytes calldata sig, uint8 scope) external {
+    function validateFromSenderFrame(bytes calldata sig, uint8) external {
         _requireVerifyFrame();
         ValidationStorage storage vs = _validationStorage();
         address account = FrameTxLib.txSender();
@@ -271,7 +271,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         if (ValidationData.unwrap(vd) != 0) revert InvalidSignature();
         _enforceHookedExecution(vId, senderFrameIdx);
 
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     /// @notice Enable mode: verify enable data + validate in VERIFY frame (read-only).
@@ -282,7 +282,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     ///        Frame 0: VERIFY(kernel)  → validateWithEnable() — sig verify only (no sstore)
     ///        Frame 1: DEFAULT(kernel) → enableInstall()      — performs sstore
     ///        Frame 2: SENDER(kernel)  → execute()
-    function validateWithEnable(bytes calldata enableData, bytes calldata sig, uint8 scope) external {
+    function validateWithEnable(bytes calldata enableData, bytes calldata sig, uint8) external {
         _requireVerifyFrame();
         address account = FrameTxLib.txSender();
         bytes32 sigHash = FrameTxLib.sigHash();
@@ -324,7 +324,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         // Verify enableInstall DEFAULT frame exists between VERIFY and SENDER
         _verifyEnableFrameExists(senderFrameIdx);
 
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     /// @notice DEFAULT frame entry point for enable mode installation.
@@ -341,7 +341,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
     /// @notice Permission-based validation (ISigner + IPolicy[]).
     /// @dev Permissions always enforce executeHooked() in SENDER frame to ensure
     ///      stateful policy consumption runs in SENDER context (where state writes are allowed).
-    function validatePermission(bytes calldata sig, uint8 scope) external {
+    function validatePermission(bytes calldata sig, uint8) external {
         _requireVerifyFrame();
         ValidationStorage storage vs = _validationStorage();
         address account = FrameTxLib.txSender();
@@ -381,7 +381,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
             parseValidationData(ValidationData.unwrap(vd));
         if (result != address(0)) revert InvalidSignature();
 
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     // ── SENDER frame: Execution ─────────────────────────────────────────
@@ -739,7 +739,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         for (idx = current + 1; idx < count; idx++) {
             if (
                 FrameTxLib.frameMode(idx) == FRAME_MODE_SENDER
-                    && FrameTxLib.frameTarget(idx) == address(this)
+                    && FrameTxLib.frameResolvedTarget(idx) == address(this)
             ) {
                 return idx;
             }
@@ -826,10 +826,10 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         for (uint256 i = 0; i < current; i++) {
             if (
                 FrameTxLib.frameMode(i) == FRAME_MODE_VERIFY
-                    && FrameTxLib.frameTarget(i) == address(this)
+                    && FrameTxLib.frameResolvedTarget(i) == address(this)
             ) {
                 uint8 status = FrameTxLib.frameStatus(i);
-                if (status < 2) revert VerifyDidNotApprove(); // APPROVED_EXECUTION+
+                if (status != 1) revert VerifyDidNotApprove();
                 return;
             }
         }
@@ -842,7 +842,7 @@ contract Kernel8141 is IERC7579Account8141, ValidationManager8141 {
         for (uint256 i = current + 1; i < senderFrameIdx; i++) {
             if (
                 FrameTxLib.frameMode(i) == FRAME_MODE_DEFAULT
-                    && FrameTxLib.frameTarget(i) == address(this)
+                    && FrameTxLib.frameResolvedTarget(i) == address(this)
             ) {
                 return; // enableInstall DEFAULT frame found
             }

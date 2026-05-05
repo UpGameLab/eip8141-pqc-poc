@@ -87,8 +87,8 @@ contract LightAccount8141 is UUPSUpgradeable, Receiver {
 
     /// @notice Validate frame transaction signature (VERIFY frame).
     /// @param signature The signature with type prefix byte: 0x00=EOA, 0x01=CONTRACT.
-    /// @param scope The approval scope.
-    function validate(bytes calldata signature, uint8 scope) external {
+    /// @dev The legacy scope argument is ignored; approval scope is read from the current VERIFY frame flags.
+    function validate(bytes calldata signature, uint8) external {
         if (FrameTxLib.currentFrameMode() != FRAME_MODE_VERIFY) {
             revert InvalidFrameMode();
         }
@@ -108,7 +108,7 @@ contract LightAccount8141 is UUPSUpgradeable, Receiver {
         }
 
         if (!valid) revert InvalidSignature();
-        FrameTxLib.approveEmpty(scope);
+        FrameTxLib.approveEmpty(FrameTxLib.currentFrameAllowedScope());
     }
 
     // ── Execution (SENDER Frame) ──────────────────────────────────────

@@ -11,7 +11,7 @@ import {FrameTxLib} from "./FrameTxLib.sol";
 ///      as compensation from the transaction sender.
 ///
 ///      Frame transaction structure (5-frame):
-///        Frame 0: VERIFY(sender)     → account.validate(v,r,s, scope=0) → APPROVE(execution)
+///        Frame 0: VERIFY(sender, flags=2) → account.validate(v,r,s)     → APPROVE(execution)
 ///        Frame 1: VERIFY(paymaster)  → paymaster.validate()             → APPROVE(payment)
 ///        Frame 2: SENDER(erc20)      → token.transfer(paymaster, amount)
 ///        Frame 3: SENDER(account)    → account.execute(target, value, data)
