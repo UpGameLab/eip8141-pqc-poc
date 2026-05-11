@@ -23,7 +23,7 @@ contract Falcon8141AccountTest is Test {
         );
     }
 
-    function test_constructorStoresConfig() public view {
+    function test_constructorStoresConfig() public {
         assertEq(account.publicKeyContract(), pkContract);
         assertEq(account.hashToPointPrecompile(), H2P_PRECOMPILE);
         assertEq(account.falconCorePrecompile(), CORE_PRECOMPILE);
@@ -33,7 +33,7 @@ contract Falcon8141AccountTest is Test {
         assertEq(account.falconSigner(), address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xFB), pk))))));
     }
 
-    function test_publicKeyReadsDataContract() public view {
+    function test_publicKeyReadsDataContract() public {
         assertEq(account.publicKey(), pk);
     }
 
@@ -64,7 +64,7 @@ contract Falcon8141AccountTest is Test {
         new Falcon8141Account(pkContract, H2P_PRECOMPILE, address(0), Falcon8141Account.HashToPointMode.KECCAK_PRNG);
     }
 
-    function test_validationDigestBindsScopeAndSigHash() public view {
+    function test_validationDigestBindsScopeAndSigHash() public {
         bytes32 sigHash = keccak256("frame tx");
 
         bytes32 executionDigest = account.validationDigest(sigHash, account.APPROVE_EXECUTION());
@@ -84,14 +84,18 @@ contract Falcon8141AccountTest is Test {
     }
 
     function test_validateRevertsIfNotEntryPoint() public {
+        uint8 scope = account.APPROVE_PAYMENT_AND_EXECUTION();
+
         vm.expectRevert(Falcon8141Account.InvalidCaller.selector);
-        account.validate("", account.APPROVE_PAYMENT_AND_EXECUTION());
+        account.validate("", scope);
     }
 
     function test_validateRevertsInvalidSignatureLengthBeforeFrameOpcodes() public {
+        uint8 scope = account.APPROVE_PAYMENT_AND_EXECUTION();
+
         vm.prank(ENTRY_POINT);
         vm.expectRevert(Falcon8141Account.InvalidSignatureLength.selector);
-        account.validate(hex"1234", account.APPROVE_PAYMENT_AND_EXECUTION());
+        account.validate(hex"1234", scope);
     }
 
     function test_executeRevertsIfNotSelf() public {

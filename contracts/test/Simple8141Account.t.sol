@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {LocalTest} from "./TestHelpers.sol";
 import {Simple8141Account} from "../src/Simple8141Account.sol";
 
-contract Simple8141AccountTest is Test {
+contract Simple8141AccountTest is LocalTest {
     Simple8141Account account;
     address owner;
 
@@ -15,7 +15,7 @@ contract Simple8141AccountTest is Test {
 
     // ── Constructor ──────────────────────────────────────────────────
 
-    function test_owner() public view {
+    function test_owner() public {
         assertEq(account.owner(), owner);
     }
 

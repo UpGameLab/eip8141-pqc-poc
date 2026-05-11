@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {LocalTest} from "./TestHelpers.sol";
 import {ERC20Paymaster} from "../src/ERC20Paymaster.sol";
 import {BenchmarkToken} from "../src/BenchmarkToken.sol";
 
-contract ERC20PaymasterTest is Test {
+contract ERC20PaymasterTest is LocalTest {
     ERC20Paymaster paymaster;
     BenchmarkToken token;
     address owner;
@@ -20,7 +20,7 @@ contract ERC20PaymasterTest is Test {
 
     // ── Constructor ──────────────────────────────────────────────────
 
-    function test_owner() public view {
+    function test_owner() public {
         assertEq(paymaster.owner(), owner);
     }
 

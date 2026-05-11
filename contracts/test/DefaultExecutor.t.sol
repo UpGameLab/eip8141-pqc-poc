@@ -11,17 +11,17 @@ contract DefaultExecutorTest is Test {
         executor = new DefaultExecutor();
     }
 
-    function test_isModuleType_executor() public view {
+    function test_isModuleType_executor() public {
         assertTrue(executor.isModuleType(2)); // MODULE_TYPE_EXECUTOR
     }
 
-    function test_isModuleType_otherTypes() public view {
+    function test_isModuleType_otherTypes() public {
         assertFalse(executor.isModuleType(1)); // MODULE_TYPE_VALIDATOR
         assertFalse(executor.isModuleType(3)); // MODULE_TYPE_FALLBACK
         assertFalse(executor.isModuleType(4)); // MODULE_TYPE_HOOK
     }
 
-    function test_isInitialized_alwaysTrue() public view {
+    function test_isInitialized_alwaysTrue() public {
         assertTrue(executor.isInitialized(address(0)));
         assertTrue(executor.isInitialized(address(this)));
         assertTrue(executor.isInitialized(address(0xdead)));

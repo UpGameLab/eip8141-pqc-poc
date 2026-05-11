@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {LocalTest} from "./TestHelpers.sol";
 import {Kernel8141} from "../src/example/kernel/Kernel8141.sol";
 import {Kernel8141Factory} from "../src/example/kernel/factory/Kernel8141Factory.sol";
 import {ECDSAValidator} from "../src/example/kernel/validators/ECDSAValidator.sol";
@@ -10,7 +10,7 @@ import {IHook8141} from "../src/example/kernel/interfaces/IHook8141.sol";
 import {ValidatorLib8141} from "../src/example/kernel/utils/ValidatorLib8141.sol";
 import {ValidationId, ExecMode} from "../src/example/kernel/types/Types8141.sol";
 
-contract Kernel8141Test is Test {
+contract Kernel8141Test is LocalTest {
     Kernel8141 kernel;
     Kernel8141Factory factory;
     ECDSAValidator ecdsaValidator;
@@ -43,11 +43,11 @@ contract Kernel8141Test is Test {
 
     // ── Initialization ───────────────────────────────────────────────
 
-    function test_initialize_setsRootValidator() public view {
+    function test_initialize_setsRootValidator() public {
         assertTrue(kernel.isModuleInstalled(1, address(ecdsaValidator), ""));
     }
 
-    function test_initialize_setsOwner() public view {
+    function test_initialize_setsOwner() public {
         (address storedOwner) = ecdsaValidator.ecdsaValidatorStorage(address(kernel));
         assertEq(storedOwner, owner);
     }
@@ -60,7 +60,7 @@ contract Kernel8141Test is Test {
 
     // ── Factory ──────────────────────────────────────────────────────
 
-    function test_factory_deterministicAddress() public view {
+    function test_factory_deterministicAddress() public {
         ValidationId rootVId = ValidatorLib8141.validatorToIdentifier(IValidator8141(address(ecdsaValidator)));
         bytes memory initData = abi.encodeCall(
             Kernel8141.initialize,
@@ -83,11 +83,11 @@ contract Kernel8141Test is Test {
 
     // ── Introspection ────────────────────────────────────────────────
 
-    function test_accountId() public view {
+    function test_accountId() public {
         assertEq(kernel.accountId(), "kernel8141.v0.1.0");
     }
 
-    function test_supportsModule() public view {
+    function test_supportsModule() public {
         assertTrue(kernel.supportsModule(1)); // VALIDATOR
         assertTrue(kernel.supportsModule(2)); // EXECUTOR
         assertTrue(kernel.supportsModule(3)); // FALLBACK
@@ -98,24 +98,24 @@ contract Kernel8141Test is Test {
         assertFalse(kernel.supportsModule(7));
     }
 
-    function test_isModuleInstalled_validator() public view {
+    function test_isModuleInstalled_validator() public {
         assertTrue(kernel.isModuleInstalled(1, address(ecdsaValidator), ""));
         assertFalse(kernel.isModuleInstalled(1, address(0xdead), ""));
     }
 
     // ── Token receivers ──────────────────────────────────────────────
 
-    function test_onERC721Received() public view {
+    function test_onERC721Received() public {
         bytes4 result = kernel.onERC721Received(address(0), address(0), 0, "");
         assertEq(result, kernel.onERC721Received.selector);
     }
 
-    function test_onERC1155Received() public view {
+    function test_onERC1155Received() public {
         bytes4 result = kernel.onERC1155Received(address(0), address(0), 0, 0, "");
         assertEq(result, kernel.onERC1155Received.selector);
     }
 
-    function test_onERC1155BatchReceived() public view {
+    function test_onERC1155BatchReceived() public {
         bytes4 result =
             kernel.onERC1155BatchReceived(address(0), address(0), new uint256[](0), new uint256[](0), "");
         assertEq(result, kernel.onERC1155BatchReceived.selector);

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {LocalTest} from "./TestHelpers.sol";
 import {SimplePaymaster} from "../src/SimplePaymaster.sol";
 
-contract SimplePaymasterTest is Test {
+contract SimplePaymasterTest is LocalTest {
     SimplePaymaster paymaster;
     address paymasterSigner;
 
@@ -15,7 +15,7 @@ contract SimplePaymasterTest is Test {
 
     // ── Constructor ──────────────────────────────────────────────────
 
-    function test_signer() public view {
+    function test_signer() public {
         assertEq(paymaster.signer(), paymasterSigner);
     }
 

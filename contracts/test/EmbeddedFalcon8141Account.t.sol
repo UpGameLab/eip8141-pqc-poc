@@ -24,7 +24,7 @@ contract EmbeddedFalcon8141AccountTest is Test {
             factory.deploy(pk, H2P_PRECOMPILE, CORE_PRECOMPILE, EmbeddedFalcon8141Account.HashToPointMode.KECCAK_PRNG);
     }
 
-    function test_factoryDeploysInitializedAccount() public view {
+    function test_factoryDeploysInitializedAccount() public {
         assertTrue(account.initialized());
         assertEq(account.hashToPointPrecompile(), H2P_PRECOMPILE);
         assertEq(account.falconCorePrecompile(), CORE_PRECOMPILE);
@@ -32,7 +32,7 @@ contract EmbeddedFalcon8141AccountTest is Test {
         assertEq(account.algType(), account.ALG_TYPE_KECCAK_PRNG());
     }
 
-    function test_publicKeyReadsOwnRuntimeSuffix() public view {
+    function test_publicKeyReadsOwnRuntimeSuffix() public {
         assertEq(account.publicKey(), pk);
         assertEq(account.publicKeyHash(), keccak256(pk));
 
@@ -42,7 +42,7 @@ contract EmbeddedFalcon8141AccountTest is Test {
         assertEq(_slice(code, offset, pk.length), pk);
     }
 
-    function test_falconSignerUsesAlgTypePrefixedEmbeddedKey() public view {
+    function test_falconSignerUsesAlgTypePrefixedEmbeddedKey() public {
         assertEq(account.falconSigner(), address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xFB), pk))))));
     }
 
@@ -81,7 +81,7 @@ contract EmbeddedFalcon8141AccountTest is Test {
         );
     }
 
-    function test_validationDigestBindsScopeAndSigHash() public view {
+    function test_validationDigestBindsScopeAndSigHash() public {
         bytes32 sigHash = keccak256("frame tx");
 
         bytes32 executionDigest = account.validationDigest(sigHash, account.APPROVE_EXECUTION());
@@ -101,14 +101,18 @@ contract EmbeddedFalcon8141AccountTest is Test {
     }
 
     function test_validateRevertsIfNotEntryPoint() public {
+        uint8 scope = account.APPROVE_PAYMENT_AND_EXECUTION();
+
         vm.expectRevert(EmbeddedFalcon8141Account.InvalidCaller.selector);
-        account.validate("", account.APPROVE_PAYMENT_AND_EXECUTION());
+        account.validate("", scope);
     }
 
     function test_validateRevertsInvalidSignatureLengthBeforeFrameOpcodes() public {
+        uint8 scope = account.APPROVE_PAYMENT_AND_EXECUTION();
+
         vm.prank(ENTRY_POINT);
         vm.expectRevert(EmbeddedFalcon8141Account.InvalidSignatureLength.selector);
-        account.validate(hex"1234", account.APPROVE_PAYMENT_AND_EXECUTION());
+        account.validate(hex"1234", scope);
     }
 
     function test_executeRevertsIfNotSelf() public {

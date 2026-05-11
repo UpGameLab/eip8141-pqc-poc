@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {LocalTest} from "./TestHelpers.sol";
 import {SpendingLimitHook} from "../src/example/kernel/hooks/SpendingLimitHook.sol";
 
-contract SpendingLimitHookTest is Test {
+contract SpendingLimitHookTest is LocalTest {
     SpendingLimitHook hook;
     address account;
 
@@ -16,7 +16,7 @@ contract SpendingLimitHookTest is Test {
         hook.onInstall(abi.encode(10 ether)); // 10 ETH daily limit
     }
 
-    function test_onInstall_setsLimit() public view {
+    function test_onInstall_setsLimit() public {
         (uint256 dailyLimit, uint256 spentToday, uint256 lastResetDay) = hook.spendingStates(account);
         assertEq(dailyLimit, 10 ether);
         assertEq(spentToday, 0);
@@ -29,12 +29,12 @@ contract SpendingLimitHookTest is Test {
         hook.onInstall(abi.encode(0));
     }
 
-    function test_isInitialized() public view {
+    function test_isInitialized() public {
         assertTrue(hook.isInitialized(account));
         assertFalse(hook.isInitialized(address(0xdead)));
     }
 
-    function test_isModuleType_hook() public view {
+    function test_isModuleType_hook() public {
         assertTrue(hook.isModuleType(4)); // MODULE_TYPE_HOOK
         assertFalse(hook.isModuleType(1)); // MODULE_TYPE_VALIDATOR
     }

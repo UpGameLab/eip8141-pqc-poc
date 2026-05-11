@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {LocalTest} from "./TestHelpers.sol";
 import {ECDSAValidator} from "../src/example/kernel/validators/ECDSAValidator.sol";
 
-contract ECDSAValidatorTest is Test {
+contract ECDSAValidatorTest is LocalTest {
     ECDSAValidator validator;
     address owner;
     uint256 ownerKey;
@@ -22,7 +22,7 @@ contract ECDSAValidatorTest is Test {
 
     // ── onInstall / onUninstall ──────────────────────────────────────
 
-    function test_onInstall_setsOwner() public view {
+    function test_onInstall_setsOwner() public {
         (address storedOwner) = validator.ecdsaValidatorStorage(account);
         assertEq(storedOwner, owner);
     }
@@ -33,7 +33,7 @@ contract ECDSAValidatorTest is Test {
         validator.onInstall(abi.encodePacked(address(0)));
     }
 
-    function test_isInitialized() public view {
+    function test_isInitialized() public {
         assertTrue(validator.isInitialized(account));
         assertFalse(validator.isInitialized(address(0xdead)));
     }
@@ -48,22 +48,22 @@ contract ECDSAValidatorTest is Test {
 
     // ── isModuleType ────────────────────────────────────────────────
 
-    function test_isModuleType_validator() public view {
+    function test_isModuleType_validator() public {
         assertTrue(validator.isModuleType(1)); // MODULE_TYPE_VALIDATOR
     }
 
-    function test_isModuleType_hook() public view {
+    function test_isModuleType_hook() public {
         assertTrue(validator.isModuleType(4)); // MODULE_TYPE_HOOK
     }
 
-    function test_isModuleType_other() public view {
+    function test_isModuleType_other() public {
         assertFalse(validator.isModuleType(2)); // MODULE_TYPE_EXECUTOR
         assertFalse(validator.isModuleType(3)); // MODULE_TYPE_FALLBACK
     }
 
     // ── validateSignature ────────────────────────────────────────────
 
-    function test_validateSignature_valid() public view {
+    function test_validateSignature_valid() public {
         bytes32 hash = keccak256("test message");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
         bytes memory signature = abi.encodePacked(r, s, v);
@@ -72,7 +72,7 @@ contract ECDSAValidatorTest is Test {
         assertTrue(valid);
     }
 
-    function test_validateSignature_validWithEthSignedMessageHash() public view {
+    function test_validateSignature_validWithEthSignedMessageHash() public {
         bytes32 hash = keccak256("test message");
         bytes32 ethHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, ethHash);
@@ -93,7 +93,7 @@ contract ECDSAValidatorTest is Test {
         assertFalse(valid);
     }
 
-    function test_validateSignature_uninitializedAccount() public view {
+    function test_validateSignature_uninitializedAccount() public {
         bytes32 hash = keccak256("test message");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
         bytes memory signature = abi.encodePacked(r, s, v);

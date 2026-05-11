@@ -1,12 +1,12 @@
 [submodule "8141-geth"]
 	path = 8141-geth
-	url = https://github.com/sm-stack/8141-geth
+	url = https://github.com/UpGameLab/8141-geth.git
 [submodule "solidity-eip8141"]
 	path = solidity-eip8141
-	url = https://github.com/sm-stack/solidity-eip8141
+	url = https://github.com/UpGameLab/solidity-eip8141.git
 [submodule "contracts/lib/solady"]
 	path = contracts/lib/solady
 	url = https://github.com/Vectorized/solady
 [submodule "viem-eip8141"]
 	path = viem-eip8141
-	url = https://github.com/sm-stack/viem-eip8141
+	url = https://github.com/UpGameLab/viem-eip8141.git

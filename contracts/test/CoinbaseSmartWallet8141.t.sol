@@ -29,7 +29,7 @@ contract CoinbaseSmartWallet8141Test is Test {
         vm.deal(address(wallet), 10 ether);
     }
 
-    function test_Initialize() public view {
+    function test_Initialize() public {
         assertEq(wallet.nextOwnerIndex(), 2);
         assertTrue(wallet.isOwnerAddress(owner1));
         assertTrue(wallet.isOwnerAddress(owner2));
@@ -38,7 +38,7 @@ contract CoinbaseSmartWallet8141Test is Test {
         assertEq(wallet.removedOwnersCount(), 0);
     }
 
-    function test_OwnerAtIndex() public view {
+    function test_OwnerAtIndex() public {
         bytes memory owner1Bytes = wallet.ownerAtIndex(0);
         assertEq(owner1Bytes, abi.encode(owner1));
 
@@ -46,7 +46,7 @@ contract CoinbaseSmartWallet8141Test is Test {
         assertEq(owner2Bytes, abi.encode(owner2));
     }
 
-    function test_FactoryDeterministicAddress() public view {
+    function test_FactoryDeterministicAddress() public {
         bytes[] memory owners = new bytes[](2);
         owners[0] = abi.encode(owner1);
         owners[1] = abi.encode(owner2);
@@ -74,7 +74,7 @@ contract CoinbaseSmartWallet8141Test is Test {
         assertTrue(wallet2.isOwnerAddress(owner1));
     }
 
-    function test_ImplementationLocked() public view {
+    function test_ImplementationLocked() public {
         // Implementation should have address(0) as owner (sentinel)
         assertTrue(impl.isOwnerAddress(address(0)));
     }
@@ -138,7 +138,7 @@ contract CoinbaseSmartWallet8141Test is Test {
         assertEq(mixedWallet.ownerAtIndex(2), abi.encode(owner2));
     }
 
-    function test_CanSkipChainIdValidation() public view {
+    function test_CanSkipChainIdValidation() public {
         assertTrue(wallet.canSkipChainIdValidation(wallet.addOwnerAddress.selector));
         assertTrue(wallet.canSkipChainIdValidation(wallet.addOwnerPublicKey.selector));
         assertTrue(wallet.canSkipChainIdValidation(wallet.removeOwnerAtIndex.selector));
@@ -147,7 +147,7 @@ contract CoinbaseSmartWallet8141Test is Test {
         assertFalse(wallet.canSkipChainIdValidation(wallet.executeBatch.selector));
     }
 
-    function test_ERC1271ReplaySafeHash() public view {
+    function test_ERC1271ReplaySafeHash() public {
         bytes32 hash = keccak256("test");
         bytes32 safe1 = wallet.replaySafeHash(hash);
         assertTrue(safe1 != bytes32(0));
@@ -157,12 +157,12 @@ contract CoinbaseSmartWallet8141Test is Test {
         assertTrue(safe1 != safe2);
     }
 
-    function test_DomainSeparator() public view {
+    function test_DomainSeparator() public {
         bytes32 ds = wallet.domainSeparator();
         assertTrue(ds != bytes32(0));
     }
 
-    function test_Eip712Domain() public view {
+    function test_Eip712Domain() public {
         (
             bytes1 fields,
             string memory name,
@@ -179,7 +179,7 @@ contract CoinbaseSmartWallet8141Test is Test {
         assertEq(verifyingContract, address(wallet));
     }
 
-    function test_InitCodeHash() public view {
+    function test_InitCodeHash() public {
         bytes32 hash = factory.initCodeHash();
         assertTrue(hash != bytes32(0));
     }

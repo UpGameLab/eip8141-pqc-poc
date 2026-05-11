@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {LocalTest} from "./TestHelpers.sol";
 import {GasPolicy8141} from "../src/example/kernel/policies/GasPolicy8141.sol";
 
-contract GasPolicy8141Test is Test {
+contract GasPolicy8141Test is LocalTest {
     GasPolicy8141 policy;
     address account;
     bytes32 permId;
@@ -19,7 +19,7 @@ contract GasPolicy8141Test is Test {
         policy.onInstall(abi.encodePacked(permId, uint128(1 ether)));
     }
 
-    function test_onInstall_setsBudget() public view {
+    function test_onInstall_setsBudget() public {
         (uint128 allowed, uint128 consumed) = policy.budgets(account, permId);
         assertEq(allowed, 1 ether);
         assertEq(consumed, 0);
@@ -40,7 +40,7 @@ contract GasPolicy8141Test is Test {
         assertEq(consumed, 0);
     }
 
-    function test_isModuleType_policy() public view {
+    function test_isModuleType_policy() public {
         assertTrue(policy.isModuleType(5)); // MODULE_TYPE_POLICY
         assertFalse(policy.isModuleType(4)); // MODULE_TYPE_HOOK
     }
