@@ -4,7 +4,8 @@
        e2e e2e-simple e2e-kernel e2e-kernel-validator e2e-hooked \
        e2e-coinbase-ecdsa e2e-coinbase-webauthn e2e-light-account \
        e2e-negative-mempool e2e-negative-protocol e2e-negative \
-       e2e-mldsa e2e-eoa e2e-eoa-batching e2e-eoa-sponsor e2e-eoa-p256 \
+       e2e-mldsa e2e-falcon e2e-falcon-eoa \
+       e2e-eoa e2e-eoa-batching e2e-eoa-sponsor e2e-eoa-p256 \
        benchmark
 
 BUILD_DIR := $(CURDIR)/build
@@ -81,6 +82,12 @@ e2e-negative-protocol:
 
 e2e-mldsa:
 	cd contracts && npx tsx e2e/mldsa/mldsa-basic.ts
+
+e2e-falcon-eoa:
+	cd contracts && npx tsx e2e/falcon/falcon-basic.ts
+
+e2e-falcon:
+	$(MAKE) e2e-falcon-eoa
 
 e2e-eoa-batching:
 	cd contracts && npx tsx e2e/eoa/eoa-batching.ts
