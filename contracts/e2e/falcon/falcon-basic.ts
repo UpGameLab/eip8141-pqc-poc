@@ -4,7 +4,14 @@
  * Usage: cd contracts && npx tsx e2e/falcon/falcon-basic.ts
  */
 
-import { formatEther, type Address, type Hex } from "viem";
+import {
+  concatHex,
+  formatEther,
+  numberToHex,
+  toRlp,
+  type Address,
+  type Hex,
+} from "viem";
 import { toFrameAccount } from "viem/eip8141";
 import type { FrameAccount } from "viem/eip8141";
 import { DEAD_ADDR } from "../helpers/config.js";
@@ -34,6 +41,25 @@ import {
   testHeader,
   testPassed,
 } from "../helpers/log.js";
+
+function toRlpQuantity(value: bigint): Hex {
+  return value === 0n ? "0x" : numberToHex(value);
+}
+
+function buildFalconEoaSenderData(
+  calls: { to: Address; value?: bigint; data?: Hex }[],
+): Hex {
+  return concatHex([
+    "0x02",
+    toRlp(
+      calls.map((call) => [
+        call.to,
+        toRlpQuantity(call.value ?? 0n),
+        call.data ?? ("0x" as Hex),
+      ]),
+    ),
+  ]);
+}
 
 function createFalconEoaAccount(params: {
   address: Address;
@@ -69,15 +95,16 @@ function createFalconEoaAccount(params: {
         },
       ];
     },
-    encodeCalls: (calls) =>
-      calls.map((call) => ({
+    encodeCalls: (calls) => [
+      {
         mode: "sender" as const,
-        flags: call.flags ?? 0,
-        target: call.to,
+        flags: 0,
+        target: null,
         gasLimit: senderGas,
-        value: call.value ?? 0n,
-        data: call.data ?? ("0x" as Hex),
-      })),
+        value: 0n,
+        data: buildFalconEoaSenderData(calls),
+      },
+    ],
   });
 }
 
