@@ -83,6 +83,7 @@ async function main() {
       });
       return {
         mode: "verify" as const,
+        flags: 1,
         target: sponsorAddr,
         gasLimit: 200_000n,
         data,

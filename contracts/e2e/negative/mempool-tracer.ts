@@ -78,7 +78,7 @@ function buildFrameTxParams(
     maxPriorityFeePerGas: 1_000_000_000n,
     maxFeePerGas: gasFeeCap,
     frames: [
-      { mode: 'verify', target: null, gasLimit: verifyGasLimit, data: '0x' },
+      { mode: 'verify', flags: 2, target: null, gasLimit: verifyGasLimit, data: '0x' },
       { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
     ],
     type: 'frame',

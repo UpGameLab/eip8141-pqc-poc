@@ -134,7 +134,7 @@ async function main() {
       maxFeePerGas: ctx.gasFeeCap,
       frames: [
         { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
-        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'verify', flags: 2, target: null, gasLimit: 200_000n, data: '0x' },
       ],
       type: 'frame',
     };
@@ -164,7 +164,7 @@ async function main() {
       maxPriorityFeePerGas: 1_000_000_000n,
       maxFeePerGas: ctx.gasFeeCap,
       frames: [
-        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'verify', flags: 1, target: null, gasLimit: 200_000n, data: '0x' },
         { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
       type: 'frame',
@@ -195,7 +195,7 @@ async function main() {
       maxPriorityFeePerGas: 1_000_000_000n,
       maxFeePerGas: ctx.gasFeeCap,
       frames: [
-        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'verify', flags: 2, target: null, gasLimit: 200_000n, data: '0x' },
         { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
       type: 'frame',
@@ -203,7 +203,7 @@ async function main() {
 
     const msg = await sendExpectingRejection(
       publicClient, params,
-      [{ index: 0, scope: 0 }],
+      [{ index: 0, scope: 2 }],
       "no payer approved"
     );
     step(`Rejected: ${msg.slice(0, 120)}`);
@@ -226,8 +226,8 @@ async function main() {
       maxPriorityFeePerGas: 1_000_000_000n,
       maxFeePerGas: ctx.gasFeeCap,
       frames: [
-        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
-        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'verify', flags: 2, target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'verify', flags: 2, target: null, gasLimit: 200_000n, data: '0x' },
         { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
       type: 'frame',
@@ -235,7 +235,7 @@ async function main() {
 
     const msg = await sendExpectingRejection(
       publicClient, params,
-      [{ index: 0, scope: 0 }, { index: 1, scope: 0 }],
+      [{ index: 0, scope: 2 }, { index: 1, scope: 2 }],
       "re-approval"
     );
     step(`Rejected: ${msg.slice(0, 120)}`);
@@ -283,7 +283,7 @@ async function main() {
       maxPriorityFeePerGas: 1_000_000_000n,
       maxFeePerGas: innerGasFeeCap,
       frames: [
-        { mode: 'verify', target: null, gasLimit: 200_000n, data: '0x' },
+        { mode: 'verify', flags: 2, target: null, gasLimit: 200_000n, data: '0x' },
         { mode: 'sender', target: DEAD_ADDR, gasLimit: 50_000n, data: '0x' },
       ],
       type: 'frame',

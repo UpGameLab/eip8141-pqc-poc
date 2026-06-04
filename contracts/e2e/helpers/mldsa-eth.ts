@@ -223,7 +223,7 @@ function polyMulNTT(a: Poly, b: Poly): Poly {
 function matVecMulNTT(aHat: PolyMat, v: PolyVec): PolyVec {
   const result: PolyVec = [];
   for (let i = 0; i < K; i++) {
-    let acc = new Int32Array(N);
+    let acc: Poly = new Int32Array(N);
     for (let j = 0; j < L; j++) {
       const t = polyMulNTT(aHat[i][j], v[j]);
       acc = polyAdd(acc, t);

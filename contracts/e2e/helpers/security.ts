@@ -41,7 +41,7 @@ export async function buildUnsignedFrameTx(
     maxPriorityFeePerGas: 1_000_000_000n,
     maxFeePerGas: gasFeeCap,
     frames: [
-      { mode: "verify", target: null, gasLimit: 300_000n, data: "0x" },
+      { mode: "verify", flags: 2, target: null, gasLimit: 300_000n, data: "0x" },
       { mode: "sender", target: null, gasLimit: 500_000n, data: senderCalldata },
     ],
     type: "frame",

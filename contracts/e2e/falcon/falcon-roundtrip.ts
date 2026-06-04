@@ -64,6 +64,17 @@ const falconAccountAbi = [
     outputs: [],
     stateMutability: "view",
   },
+  {
+    type: "function",
+    name: "execute",
+    inputs: [
+      { name: "target", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
 ] as const;
 
 function sstore2CreationCode(data: Uint8Array): Hex {
@@ -134,7 +145,6 @@ function createFalconSmartAccount(params: {
           flags: scope,
           target: null,
           gasLimit: verifyGas,
-          value: 0n,
           data: encodeFunctionData({
             abi: falconAccountAbi,
             functionName: "validate",
@@ -146,11 +156,13 @@ function createFalconSmartAccount(params: {
     encodeCalls: (calls) =>
       calls.map((call) => ({
         mode: "sender" as const,
-        flags: call.flags ?? 0,
-        target: call.to,
+        target: null,
         gasLimit: senderGas,
-        value: call.value ?? 0n,
-        data: call.data ?? ("0x" as Hex),
+        data: encodeFunctionData({
+          abi: falconAccountAbi,
+          functionName: "execute",
+          args: [call.to, call.value ?? 0n, call.data ?? ("0x" as Hex)],
+        }),
       })),
   });
 }

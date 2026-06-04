@@ -130,6 +130,7 @@ function createMLDSAAccount(params: {
       return [
         {
           mode: "verify" as const,
+          flags: 2,
           target: null,
           gasLimit: verifyGas,
           data,

@@ -140,13 +140,13 @@ async function main() {
     args: [2n],
   });
 
-  // Create Simple8141Account with scope=0 (EXECUTION only — paymaster handles payment)
+  // Create Simple8141Account with execution scope; paymaster handles payment.
   const account = toSimple8141Account({
     address: accountAddr,
     owner,
     verifyGasLimit: 200_000n,
     senderGasLimit: 100_000n,
-    scope: 0,
+    scope: 2,
   });
 
   // Create paymaster
@@ -155,6 +155,7 @@ async function main() {
     async signFrameTransaction() {
       return {
         mode: "verify" as const,
+        flags: 1,
         target: paymasterAddr,
         gasLimit: 200_000n,
         data: PAYMASTER_VALIDATE_SELECTOR,

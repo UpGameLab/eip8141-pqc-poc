@@ -85,7 +85,7 @@ export function createKernelAccount(
         functionName: "validate",
         args: [sig, scope],
       });
-      return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
+      return [{ mode: "verify" as const, flags: scope, target: null, gasLimit: verifyGas, data }];
     },
     encodeCalls: defaultEncodeCalls(senderGas),
     getDeployFrame: buildDeployFrame(deploy),
@@ -112,7 +112,7 @@ export function createKernelValidatorAccount(
         functionName: "validateFromSenderFrame",
         args: [prefixedSig, scope],
       });
-      return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
+      return [{ mode: "verify" as const, flags: scope, target: null, gasLimit: verifyGas, data }];
     },
     encodeCalls: defaultEncodeCalls(senderGas),
     getDeployFrame: buildDeployFrame(deploy),
@@ -139,7 +139,7 @@ export function createKernelPermissionAccount(
         functionName: "validatePermission",
         args: [fullSig, scope],
       });
-      return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
+      return [{ mode: "verify" as const, flags: scope, target: null, gasLimit: verifyGas, data }];
     },
     encodeCalls: defaultEncodeCalls(senderGas),
     getDeployFrame: buildDeployFrame(deploy),
@@ -170,7 +170,7 @@ export function createCoinbaseAccount(
         functionName: "validate",
         args: [signatureWrapper, scope],
       });
-      return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
+      return [{ mode: "verify" as const, flags: scope, target: null, gasLimit: verifyGas, data }];
     },
     encodeCalls: defaultEncodeCalls(senderGas),
     getDeployFrame: buildDeployFrame(deploy),
@@ -198,7 +198,7 @@ export function createLightAccount(
         functionName: "validate",
         args: [typedSig, scope],
       });
-      return [{ mode: "verify" as const, target: null, gasLimit: verifyGas, data }];
+      return [{ mode: "verify" as const, flags: scope, target: null, gasLimit: verifyGas, data }];
     },
     encodeCalls: defaultEncodeCalls(senderGas),
     getDeployFrame: buildDeployFrame(deploy),
