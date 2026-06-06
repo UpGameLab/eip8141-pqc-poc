@@ -5,6 +5,9 @@
   "../solidity-eip8141": {
     "rev": "872af0edbca628e3b1c9c9f8b15900c153669644"
   },
+  "../viem-eip8141": {
+    "rev": "cc1dccd2a97f6b3e6918c2c92ff3589d404121c0"
+  },
   "lib/solady": {
     "tag": {
       "name": "v0.1.26",

@@ -140,9 +140,13 @@ function createMLDSAAccount(params: {
     encodeCalls: (calls) =>
       calls.map((c) => ({
         mode: "sender" as const,
-        target: c.to,
+        target: null,
         gasLimit: senderGas,
-        data: c.data ?? ("0x" as Hex),
+        data: encodeFunctionData({
+          abi: mldsaAccountAbi,
+          functionName: "execute",
+          args: [c.to, c.value ?? 0n, c.data ?? ("0x" as Hex)],
+        }),
       })),
   });
 }
