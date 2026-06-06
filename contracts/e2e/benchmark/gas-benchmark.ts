@@ -1,8 +1,8 @@
 /**
  * EIP-8141 Gas Benchmark
  *
- * Measures gas costs for ETH transfer and ERC20 transfer across
- * Simple8141Account, Kernel8141, CoinbaseSmartWallet8141, and LightAccount8141.
+ * Measures gas costs for PQC and ECDSA EIP-8141 accounts. PQC accounts measure
+ * ETH transfers; existing ECDSA account entries measure ETH and ERC20 transfers.
  *
  * Usage: cd contracts && npx tsx e2e/benchmark/gas-benchmark.ts
  */
@@ -14,15 +14,21 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import {
+  concatHex,
   encodeAbiParameters,
   parseAbiParameters,
   encodeFunctionData,
+  keccak256,
+  numberToHex,
+  toBytes,
+  toRlp,
   type Hex,
   type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { toSimple8141Account } from "viem/eip8141";
-import { DEV_KEY, HOOK_INSTALLED } from "../helpers/config.js";
+import { toFrameAccount, toSimple8141Account } from "viem/eip8141";
+import type { FrameAccount } from "viem/eip8141";
+import { CHAIN_ID, DEV_KEY, HOOK_INSTALLED } from "../helpers/config.js";
 import { encodeExecMode, encodeSingleExec } from "../helpers/exec-encoding.js";
 
 // Per-account recipient addresses to avoid SSTORE zero→non-zero bias
@@ -30,13 +36,34 @@ const DEAD_SIMPLE   = "0x000000000000000000000000000000000000deA1" as Address;
 const DEAD_KERNEL   = "0x000000000000000000000000000000000000dEa2" as Address;
 const DEAD_COINBASE = "0x000000000000000000000000000000000000DEA3" as Address;
 const DEAD_LIGHT    = "0x000000000000000000000000000000000000DeA4" as Address;
+const DEAD_FALCON_EOA = "0x000000000000000000000000000000000000dea5" as Address;
+const DEAD_FALCON_ACCOUNT = "0x000000000000000000000000000000000000dea6" as Address;
+const DEAD_MLDSA = "0x000000000000000000000000000000000000dea7" as Address;
 import { createTestClients, waitForReceipt, fundAccount } from "../helpers/client.js";
 import { loadBytecode, deployContract } from "../helpers/deploy.js";
 import { verifyReceipt } from "../helpers/receipt.js";
 import { kernelAbi, factoryAbi } from "../helpers/abis/kernel.js";
 import { walletAbi, factoryAbi as coinbaseFactoryAbi } from "../helpers/abis/coinbase.js";
 import { walletAbi as lightWalletAbi, factoryAbi as lightFactoryAbi } from "../helpers/abis/light-account.js";
+import { simpleAccountAbi } from "../helpers/abis/simple.js";
 import { benchmarkTokenAbi } from "../helpers/abis/benchmark-token.js";
+import {
+  FALCON_ALG_TYPE_SHAKE256,
+  FALCON_SIG_TYPE_SHAKE256,
+  buildFalconVerifyData,
+  deriveFalconAddress,
+  falconSign,
+  falconSignDigest,
+  generateFalconKeypair,
+  toHex as falconToHex,
+  type FalconEoaScope,
+} from "../helpers/falcon-eth.js";
+import {
+  fromHex as mldsaFromHex,
+  keygen as mldsaKeygen,
+  sign as mldsaSign,
+  toHex as mldsaToHex,
+} from "../helpers/mldsa-eth.js";
 import { banner, sectionHeader, info, step, success, fatal } from "../helpers/log.js";
 import { createKernelAccount, createCoinbaseAccount, createLightAccount, sendAndWait } from "../helpers/send-frame-tx.js";
 
@@ -85,6 +112,276 @@ async function sendTx(to: Address, data: Hex): Promise<void> {
   });
   const receipt = await waitForReceipt(publicClient, hash);
   if (receipt.status !== "0x1") throw new Error(`Tx failed: ${hash}`);
+}
+
+const HASH_TO_POINT_SHAKE256 =
+  "0x0000000000000000000000000000000000000014" as Address;
+const FALCON_CORE =
+  "0x0000000000000000000000000000000000000016" as Address;
+const FALCON_VALIDATION_DOMAIN = keccak256(
+  toBytes("Falcon8141Account.validation.v1"),
+);
+
+const falconAccountAbi = [
+  {
+    type: "function",
+    name: "validate",
+    inputs: [
+      { name: "signature", type: "bytes" },
+      { name: "approvalScope", type: "uint8" },
+    ],
+    outputs: [],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "execute",
+    inputs: [
+      { name: "target", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+const mldsaAccountAbi = [
+  {
+    type: "function",
+    name: "validate",
+    inputs: [
+      { name: "signature", type: "bytes" },
+      { name: "scope", type: "uint8" },
+    ],
+    outputs: [],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "execute",
+    inputs: [
+      { name: "target", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+function sstore2CreationCode(data: Uint8Array): Hex {
+  const runtimeLen = data.length + 1;
+  const header = new Uint8Array([
+    0x61, (runtimeLen >> 8) & 0xff, runtimeLen & 0xff,
+    0x80,
+    0x60, 0x0a,
+    0x3d,
+    0x39,
+    0x3d,
+    0xf3,
+    0x00,
+  ]);
+  const bytecode = new Uint8Array(header.length + data.length);
+  bytecode.set(header);
+  bytecode.set(data, header.length);
+  return falconToHex(bytecode);
+}
+
+function toRlpQuantity(value: bigint): Hex {
+  return value === 0n ? "0x" : numberToHex(value);
+}
+
+function buildFalconEoaSenderData(
+  calls: { to: Address; value?: bigint; data?: Hex }[],
+): Hex {
+  return concatHex([
+    "0x02",
+    toRlp(
+      calls.map((call) => [
+        call.to,
+        toRlpQuantity(call.value ?? 0n),
+        call.data ?? ("0x" as Hex),
+      ]),
+    ),
+  ]);
+}
+
+function createFalconEoaAccount(params: {
+  address: Address;
+  publicKey: Uint8Array;
+  secretKey: Uint8Array;
+  scope?: FalconEoaScope;
+}): FrameAccount {
+  const { address, publicKey, secretKey, scope = 2 } = params;
+  return toFrameAccount({
+    address,
+    async signFrameTransaction({ sigHash }) {
+      const signature = falconSign(
+        sigHash,
+        secretKey,
+        FALCON_SIG_TYPE_SHAKE256,
+        scope,
+      );
+      return [{
+        mode: "verify" as const,
+        flags: scope,
+        target: null,
+        gasLimit: 250_000n,
+        value: 0n,
+        data: buildFalconVerifyData(
+          publicKey,
+          signature,
+          scope,
+          FALCON_SIG_TYPE_SHAKE256,
+        ),
+      }];
+    },
+    encodeCalls: (calls) => [{
+      mode: "sender" as const,
+      flags: 0,
+      target: null,
+      gasLimit: 100_000n,
+      value: 0n,
+      data: buildFalconEoaSenderData(calls),
+    }],
+  });
+}
+
+function falconValidationDigest(
+  account: Address,
+  sigHash: Hex,
+  scope: FalconEoaScope,
+): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      parseAbiParameters("bytes32,uint256,address,uint8,bytes32,uint8"),
+      [
+        FALCON_VALIDATION_DOMAIN,
+        BigInt(CHAIN_ID),
+        account,
+        FALCON_ALG_TYPE_SHAKE256,
+        sigHash,
+        scope,
+      ],
+    ),
+  );
+}
+
+function createFalconSmartAccount(
+  address: Address,
+  secretKey: Uint8Array,
+  scope: FalconEoaScope = 2,
+): FrameAccount {
+  return toFrameAccount({
+    address,
+    async signFrameTransaction({ sigHash }) {
+      const digest = falconValidationDigest(address, sigHash, scope);
+      const signature = falconSignDigest(digest, secretKey);
+      return [{
+        mode: "verify" as const,
+        flags: scope,
+        target: null,
+        gasLimit: 500_000n,
+        data: encodeFunctionData({
+          abi: falconAccountAbi,
+          functionName: "validate",
+          args: [falconToHex(signature), scope],
+        }),
+      }];
+    },
+    encodeCalls: (calls) =>
+      calls.map((call) => ({
+        mode: "sender" as const,
+        target: null,
+        gasLimit: 100_000n,
+        data: encodeFunctionData({
+          abi: falconAccountAbi,
+          functionName: "execute",
+          args: [call.to, call.value ?? 0n, call.data ?? ("0x" as Hex)],
+        }),
+      })),
+  });
+}
+
+function createMLDSAAccount(
+  address: Address,
+  secretKey: Uint8Array,
+): FrameAccount {
+  return toFrameAccount({
+    address,
+    async signFrameTransaction({ sigHash }) {
+      const signature = mldsaSign(secretKey, mldsaFromHex(sigHash as Hex));
+      return [{
+        mode: "verify" as const,
+        flags: 2,
+        target: null,
+        gasLimit: 500_000n,
+        data: encodeFunctionData({
+          abi: mldsaAccountAbi,
+          functionName: "validate",
+          args: [mldsaToHex(signature), 2],
+        }),
+      }];
+    },
+    encodeCalls: (calls) =>
+      calls.map((call) => ({
+        mode: "sender" as const,
+        target: null,
+        gasLimit: 100_000n,
+        data: encodeFunctionData({
+          abi: mldsaAccountAbi,
+          functionName: "execute",
+          args: [call.to, call.value ?? 0n, call.data ?? ("0x" as Hex)],
+        }),
+      })),
+  });
+}
+
+async function deployFalconAccount(publicKey: Uint8Array): Promise<Address> {
+  const { address: pkContractAddr } = await deployContract(
+    walletClient,
+    publicClient,
+    sstore2CreationCode(publicKey),
+    300_000n,
+    "Falcon PK Data Contract",
+  );
+  const constructorArg = encodeAbiParameters(
+    parseAbiParameters("address,address,address,uint8"),
+    [pkContractAddr, HASH_TO_POINT_SHAKE256, FALCON_CORE, 0],
+  );
+  const initCode = `${loadBytecode("Falcon8141Account")}${constructorArg.slice(2)}` as Hex;
+  const { address } = await deployContract(
+    walletClient,
+    publicClient,
+    initCode,
+    700_000n,
+    "Falcon8141Account",
+  );
+  return address;
+}
+
+async function deployMLDSAAccount(expandedPK: Uint8Array): Promise<Address> {
+  const { address: pkContractAddr } = await deployContract(
+    walletClient,
+    publicClient,
+    sstore2CreationCode(expandedPK),
+    5_000_000n,
+    "ML-DSA PK Data Contract",
+  );
+  const constructorArg = encodeAbiParameters(
+    parseAbiParameters("address"),
+    [pkContractAddr],
+  );
+  const initCode = `${loadBytecode("MLDSA8141Account")}${constructorArg.slice(2)}` as Hex;
+  const { address } = await deployContract(
+    walletClient,
+    publicClient,
+    initCode,
+    500_000n,
+    "MLDSA8141Account",
+  );
+  return address;
 }
 
 // ─── Simple8141Account ──────────────────────────────────────
@@ -360,6 +657,90 @@ async function main() {
   };
 
   // ═════════════════════════════════════════════════════════════
+  // Falcon EOA
+  // ═════════════════════════════════════════════════════════════
+  sectionHeader("🔑 Falcon EOA");
+
+  step("Generating Falcon-512 key...");
+  const { pk: falconPublicKey, sk: falconSecretKey } = generateFalconKeypair();
+  const falconEoaAddr = deriveFalconAddress(falconPublicKey);
+  await fundAccount(walletClient, publicClient, falconEoaAddr);
+  const falconEoaAccount = createFalconEoaAccount({
+    address: falconEoaAddr,
+    publicKey: falconPublicKey,
+    secretKey: falconSecretKey,
+  });
+
+  step("ETH transfer...");
+  const falconEoaHash = await publicClient.sendFrameTransaction({
+    account: falconEoaAccount,
+    calls: [{ to: DEAD_FALCON_EOA, value: 1n }],
+  });
+  const falconEoaReceipt = await waitForReceipt(publicClient, falconEoaHash);
+  verifyReceipt(falconEoaReceipt, falconEoaAddr);
+  const falconEoaGas = extractGas(falconEoaReceipt);
+  success(`Total: ${fmtGas(falconEoaGas.totalGas)}`);
+
+  results.push(
+    { label: "Falcon EOA", totalGas: 0n, verifyGas: 0n, senderGas: 0n },
+    { label: "  ETH transfer", ...falconEoaGas },
+  );
+
+  // ═════════════════════════════════════════════════════════════
+  // Falcon8141Account
+  // ═════════════════════════════════════════════════════════════
+  sectionHeader("🔑 Falcon8141Account");
+
+  step("Deploying...");
+  const falconAccountAddr = await deployFalconAccount(falconPublicKey);
+  await fundAccount(walletClient, publicClient, falconAccountAddr);
+  const falconAccount = createFalconSmartAccount(
+    falconAccountAddr,
+    falconSecretKey,
+  );
+
+  step("ETH transfer...");
+  const falconAccountHash = await publicClient.sendFrameTransaction({
+    account: falconAccount,
+    calls: [{ to: DEAD_FALCON_ACCOUNT, value: 1n }],
+  });
+  const falconAccountReceipt = await waitForReceipt(publicClient, falconAccountHash);
+  verifyReceipt(falconAccountReceipt, falconAccountAddr);
+  const falconAccountGas = extractGas(falconAccountReceipt);
+  success(`Total: ${fmtGas(falconAccountGas.totalGas)}`);
+
+  results.push(
+    { label: "Falcon8141Account", totalGas: 0n, verifyGas: 0n, senderGas: 0n },
+    { label: "  ETH transfer", ...falconAccountGas },
+  );
+
+  // ═════════════════════════════════════════════════════════════
+  // MLDSA8141Account
+  // ═════════════════════════════════════════════════════════════
+  sectionHeader("🔑 MLDSA8141Account");
+
+  step("Generating ML-DSA-ETH key and deploying...");
+  const { expandedPK, secretKey: mldsaSecretKey } = mldsaKeygen();
+  const mldsaAccountAddr = await deployMLDSAAccount(expandedPK);
+  await fundAccount(walletClient, publicClient, mldsaAccountAddr);
+  const mldsaAccount = createMLDSAAccount(mldsaAccountAddr, mldsaSecretKey);
+
+  step("ETH transfer...");
+  const mldsaHash = await publicClient.sendFrameTransaction({
+    account: mldsaAccount,
+    calls: [{ to: DEAD_MLDSA, value: 1n }],
+  });
+  const mldsaReceipt = await waitForReceipt(publicClient, mldsaHash);
+  verifyReceipt(mldsaReceipt, mldsaAccountAddr);
+  const mldsaGas = extractGas(mldsaReceipt);
+  success(`Total: ${fmtGas(mldsaGas.totalGas)}`);
+
+  results.push(
+    { label: "MLDSA8141Account", totalGas: 0n, verifyGas: 0n, senderGas: 0n },
+    { label: "  ETH transfer", ...mldsaGas },
+  );
+
+  // ═════════════════════════════════════════════════════════════
   // Simple8141Account
   // ═════════════════════════════════════════════════════════════
   sectionHeader("🔑 Simple8141Account");
@@ -378,12 +759,27 @@ async function main() {
   success("1,000 BMK minted");
 
   const owner = privateKeyToAccount(DEV_KEY);
-  const simpleAccount = toSimple8141Account({
+  const simpleBaseAccount = toSimple8141Account({
     address: simpleAddr,
     owner,
     verifyGasLimit: 200_000n,
     senderGasLimit: 200_000n,
+    scope: 2,
   });
+  const simpleAccount: FrameAccount = {
+    ...simpleBaseAccount,
+    encodeCalls: (calls) =>
+      calls.map((call) => ({
+        mode: "sender" as const,
+        target: null,
+        gasLimit: 200_000n,
+        data: encodeFunctionData({
+          abi: simpleAccountAbi,
+          functionName: "execute",
+          args: [call.to, call.value ?? 0n, call.data ?? ("0x" as Hex)],
+        }),
+      })),
+  };
 
   step("ETH transfer...");
   const simpleEthHash = await publicClient.sendFrameTransaction({
