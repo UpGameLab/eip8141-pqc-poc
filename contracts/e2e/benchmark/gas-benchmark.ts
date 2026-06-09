@@ -9,6 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -190,6 +191,29 @@ function sstore2CreationCode(data: Uint8Array): Hex {
 
 function toRlpQuantity(value: bigint): Hex {
   return value === 0n ? "0x" : numberToHex(value);
+}
+
+function measureNativeFalconVerifier(): bigint {
+  const output = execFileSync(
+    "forge",
+    [
+      "test",
+      "--match-path",
+      "test/NativeFalconVerifier.t.sol",
+      "--match-test",
+      "test_verifyNISTKATGas",
+      "-vvvv",
+    ],
+    {
+      cwd: path.resolve(__dirname, "../.."),
+      encoding: "utf8",
+    },
+  );
+  const match = output.match(/GasMeasured\(gasUsed: ([0-9]+)/);
+  if (!match) {
+    throw new Error("Could not parse NativeFalconVerifier gas from Forge output");
+  }
+  return BigInt(match[1]);
 }
 
 function buildFalconEoaSenderData(
@@ -712,6 +736,27 @@ async function main() {
   results.push(
     { label: "Falcon8141Account", totalGas: 0n, verifyGas: 0n, senderGas: 0n },
     { label: "  ETH transfer", ...falconAccountGas },
+  );
+
+  // ═════════════════════════════════════════════════════════════
+  // NativeFalconVerifier
+  // ═════════════════════════════════════════════════════════════
+  sectionHeader("🔑 NativeFalconVerifier");
+
+  // Native verification exceeds Osaka's 2^24 per-transaction gas cap, so
+  // measure the real KAT call in Forge's uncapped test EVM.
+  step("Running Forge KAT core verification...");
+  const nativeFalconVerifyGas = measureNativeFalconVerifier();
+  success(`Core execution: ${fmtGas(nativeFalconVerifyGas)}`);
+
+  results.push(
+    { label: "NativeFalconVerifier", totalGas: 0n, verifyGas: 0n, senderGas: 0n },
+    {
+      label: "  core verify()",
+      totalGas: nativeFalconVerifyGas,
+      verifyGas: nativeFalconVerifyGas,
+      senderGas: 0n,
+    },
   );
 
   // ═════════════════════════════════════════════════════════════
