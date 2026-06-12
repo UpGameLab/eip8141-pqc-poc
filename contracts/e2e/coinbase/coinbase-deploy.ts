@@ -5,7 +5,7 @@
  * then validating and executing in the same frame transaction.
  *
  *   Frame 0: DEFAULT(factory) → CoinbaseSmartWalletFactory8141.createAccount(owners, 0)
- *   Frame 1: VERIFY(sender)   → wallet.validate(sig, scope=2) → APPROVE
+ *   Frame 1: VERIFY(sender)   → wallet.validate(sig, scope=3) → APPROVE
  *   Frame 2: SENDER(sender)   → wallet.execute(...)
  *
  * Usage: cd contracts && npx tsx e2e/coinbase/coinbase-deploy.ts

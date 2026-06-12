@@ -2,10 +2,10 @@
  * E2E: EOA P256 — passkey-style signing via EIP-8141 default code
  *
  * Uses P256 (secp256r1) signature type in the default code.
- * The EOA address is derived as keccak256(qx || qy)[12:].
+ * The EOA address is derived as keccak256(0x01 || qx || qy)[12:].
  *
  * Frame layout:
- *   Frame 0: VERIFY(sender) → P256 verify → APPROVE(0x2, both)
+ *   Frame 0: VERIFY(sender) → P256 verify → APPROVE(0x3, both)
  *   Frame 1: SENDER(sender) → RLP batch: ETH transfer
  *
  * Usage: cd contracts && npx tsx e2e/eoa/eoa-p256.ts
@@ -31,8 +31,8 @@ function generateP256Key() {
   const x = (`0x${Buffer.from(pubKey.slice(1, 33)).toString("hex")}`) as Hex;
   const y = (`0x${Buffer.from(pubKey.slice(33, 65)).toString("hex")}`) as Hex;
 
-  // EOA address for P256: keccak256(x || y)[12:]
-  const address = (`0x${keccak256(concatHex([x, y])).slice(26)}`) as Address;
+  // EOA address for P256: keccak256(0x01 || x || y)[12:]
+  const address = (`0x${keccak256(concatHex(["0x01", x, y])).slice(26)}`) as Address;
 
   return {
     privKey: (`0x${Buffer.from(privKey).toString("hex")}`) as Hex,
@@ -79,7 +79,7 @@ async function main() {
     publicKey,
     verifyGasLimit: 100_000n,
     senderGasLimit: 100_000n,
-    scope: 2,
+    scope: 3,
   });
 
   // Verify derived address matches

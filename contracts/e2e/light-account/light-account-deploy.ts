@@ -5,7 +5,7 @@
  * then validating and executing in the same frame transaction.
  *
  *   Frame 0: DEFAULT(factory) → LightAccountFactory8141.createAccount(owner, salt)
- *   Frame 1: VERIFY(sender)   → account.validate(sig, scope=2) → APPROVE
+ *   Frame 1: VERIFY(sender)   → account.validate(sig, scope=3) → APPROVE
  *   Frame 2: SENDER(sender)   → account.execute(...)
  *
  * Usage: cd contracts && npx tsx e2e/light-account/light-account-deploy.ts

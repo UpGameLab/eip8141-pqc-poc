@@ -1,11 +1,11 @@
 /**
  * E2E: EOA Gas Sponsoring — sponsor pays gas with ETH, no token needed
  *
- * Uses EIP-8141 default code with scope=0 (execution only) so a separate
+ * Uses EIP-8141 default code with scope=2 (execution only) so a separate
  * sponsor contract can pay gas via APPROVE(0x1).
  *
  * Frame layout:
- *   Frame 0: VERIFY(sender)  → ECDSA verify → APPROVE(0x0, execution only)
+ *   Frame 0: VERIFY(sender)  → ECDSA verify → APPROVE(0x2, execution only)
  *   Frame 1: VERIFY(sponsor) → sponsor.validate(sig) → APPROVE(0x1, payment)
  *   Frame 2: SENDER(sender)  → RLP batch: user's intended call
  *
@@ -59,7 +59,7 @@ async function main() {
   // ── Test: Sponsored EOA transaction ──
   testHeader(1, "EOA tx with gas sponsoring (no tokens)");
 
-  // LocalAccount passed directly — scope=0 means sponsor pays gas
+  // LocalAccount passed directly — scope=2 means sponsor pays gas
   const account = user;
 
   // Sponsor paymaster — signs the sigHash to authorize gas payment
@@ -91,12 +91,12 @@ async function main() {
     },
   };
 
-  step("Sending 3-frame tx: VERIFY(user,scope=0) → VERIFY(sponsor) → SENDER...");
+  step("Sending 3-frame tx: VERIFY(user,scope=2) → VERIFY(sponsor) → SENDER...");
   const txHash = await publicClient.sendFrameTransaction({
     account,
     paymaster,
     calls: [{ to: DEAD_ADDR }],
-    // scope defaults to 0 (execution-only) when paymaster is present
+    scope: 2,
   });
 
   const receipt = await waitForReceipt(publicClient, txHash);

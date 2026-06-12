@@ -237,7 +237,7 @@ function createFalconEoaAccount(params: {
   secretKey: Uint8Array;
   scope?: FalconEoaScope;
 }): FrameAccount {
-  const { address, publicKey, secretKey, scope = 2 } = params;
+  const { address, publicKey, secretKey, scope = 3 } = params;
   return toFrameAccount({
     address,
     async signFrameTransaction({ sigHash }) {
@@ -295,7 +295,7 @@ function falconValidationDigest(
 function createFalconSmartAccount(
   address: Address,
   secretKey: Uint8Array,
-  scope: FalconEoaScope = 2,
+  scope: FalconEoaScope = 3,
 ): FrameAccount {
   return toFrameAccount({
     address,
@@ -338,13 +338,13 @@ function createMLDSAAccount(
       const signature = mldsaSign(secretKey, mldsaFromHex(sigHash as Hex));
       return [{
         mode: "verify" as const,
-        flags: 2,
+        flags: 3,
         target: null,
         gasLimit: 500_000n,
         data: encodeFunctionData({
           abi: mldsaAccountAbi,
           functionName: "validate",
-          args: [mldsaToHex(signature), 2],
+          args: [mldsaToHex(signature), 3],
         }),
       }];
     },
@@ -809,7 +809,7 @@ async function main() {
     owner,
     verifyGasLimit: 200_000n,
     senderGasLimit: 200_000n,
-    scope: 2,
+    scope: 3,
   });
   const simpleAccount: FrameAccount = {
     ...simpleBaseAccount,

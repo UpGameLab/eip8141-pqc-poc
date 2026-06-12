@@ -5,7 +5,7 @@
  * then validating and executing in the same frame transaction.
  *
  *   Frame 0: DEFAULT(factory)  → Kernel8141Factory.createAccount(initData, salt)
- *   Frame 1: VERIFY(sender)    → kernel.validate(sig, scope=2) → APPROVE
+ *   Frame 1: VERIFY(sender)    → kernel.validate(sig, scope=3) → APPROVE
  *   Frame 2: SENDER(sender)    → kernel.execute(...)
  *
  * Usage: cd contracts && npx tsx e2e/kernel/kernel-deploy.ts

@@ -32,7 +32,7 @@ export type FalconAlgType =
   | typeof FALCON_ALG_TYPE_SHAKE256
   | typeof FALCON_ALG_TYPE_KECCAK_PRNG;
 
-export type FalconEoaScope = 0 | 1 | 2;
+export type FalconEoaScope = 1 | 2 | 3;
 
 export interface FalconKeyPair {
   pk: Uint8Array;
@@ -83,7 +83,7 @@ export function falconAlgTypeForSigType(sigType: FalconSigType): FalconAlgType {
 }
 
 export function falconEoaPrefix(scope: FalconEoaScope): number {
-  if (scope < 0 || scope > 2) {
+  if (scope < 1 || scope > 3) {
     throw new Error(`Invalid Falcon EOA approval scope: ${scope}`);
   }
   return (scope << 4) | EOA_VERIFY_MODE;
@@ -92,7 +92,7 @@ export function falconEoaPrefix(scope: FalconEoaScope): number {
 export function falconEoaMessageHash(
   sigHash: Hex,
   sigType: FalconSigType = FALCON_SIG_TYPE_SHAKE256,
-  scope: FalconEoaScope = 2,
+  scope: FalconEoaScope = 3,
 ): Hex {
   return keccak256(
     concatHex([
@@ -106,7 +106,7 @@ export function falconSign(
   sigHash: Hex,
   privkey: Uint8Array,
   sigType: FalconSigType = FALCON_SIG_TYPE_SHAKE256,
-  scope: FalconEoaScope = 2,
+  scope: FalconEoaScope = 3,
 ): Uint8Array {
   return falconSignDigest(falconEoaMessageHash(sigHash, sigType, scope), privkey);
 }
@@ -167,7 +167,7 @@ export function deriveFalconAddress(
 export function buildFalconVerifyData(
   pubkey: Uint8Array,
   signature: Uint8Array,
-  scope: FalconEoaScope = 2,
+  scope: FalconEoaScope = 3,
   sigType: FalconSigType = FALCON_SIG_TYPE_SHAKE256,
 ): Hex {
   if (signature.length !== FALCON_SIG_SIZE) {

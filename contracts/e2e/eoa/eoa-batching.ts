@@ -1,12 +1,12 @@
 /**
  * E2E: EOA Batching — multiple calls in one frame transaction (no smart account)
  *
- * Uses EIP-8141 default code to batch multiple calls into a single SENDER frame
- * via RLP encoding. No contract deployment needed — the EOA acts directly.
+ * Uses EIP-8141 default code to authorize multiple direct SENDER frames.
+ * No contract deployment needed — the EOA acts directly.
  *
  * Frame layout:
- *   Frame 0: VERIFY(sender) → ECDSA verify → APPROVE(0x2, both)
- *   Frame 1: SENDER(sender) → RLP batch [[addr1,val1,data1], [addr2,val2,data2]]
+ *   Frame 0: VERIFY(sender) → ECDSA verify → APPROVE(0x3, both)
+ *   Frames 1-3: SENDER(sender) → one direct transfer per frame
  *
  * Usage: cd contracts && npx tsx e2e/eoa/eoa-batching.ts
  */
@@ -46,7 +46,7 @@ async function main() {
     targets.map((t) => publicClient.getBalance({ address: t }))
   );
 
-  step("Sending 2-frame tx: VERIFY(ECDSA) → SENDER(RLP batch)...");
+  step("Sending 4-frame tx: VERIFY(ECDSA) → 3 direct SENDER transfers...");
   const txHash = await publicClient.sendFrameTransaction({
     account,
     calls: targets.map((to) => ({ to, value: 1n })),
@@ -64,13 +64,13 @@ async function main() {
   }
   success("Transaction succeeded");
 
-  // Verify frame count: VERIFY + SENDER = 2
-  if (!receipt.frameReceipts || receipt.frameReceipts.length !== 2) {
+  // Verify frame count: VERIFY + 3 SENDER frames = 4
+  if (!receipt.frameReceipts || receipt.frameReceipts.length !== 4) {
     throw new Error(
-      `Frame count: got ${receipt.frameReceipts?.length ?? 0}, want 2`
+      `Frame count: got ${receipt.frameReceipts?.length ?? 0}, want 4`
     );
   }
-  success("2 frame receipts present");
+  success("4 frame receipts present");
 
   // Frame 0: VERIFY → APPROVED_BOTH (0x4)
   const frame0Status = receipt.frameReceipts[0].status;
@@ -79,12 +79,13 @@ async function main() {
   }
   success("Frame 0: APPROVED_BOTH (0x4)");
 
-  // Frame 1: SENDER → SUCCESS (0x1)
-  const frame1Status = receipt.frameReceipts[1].status;
-  if (frame1Status !== "0x1") {
-    throw new Error(`Frame 1 (SENDER): got ${frame1Status}, want 0x1`);
+  for (let i = 1; i < 4; i++) {
+    const frameStatus = receipt.frameReceipts[i].status;
+    if (frameStatus !== "0x1") {
+      throw new Error(`Frame ${i} (SENDER): got ${frameStatus}, want 0x1`);
+    }
   }
-  success("Frame 1: SENDER batch SUCCESS (0x1)");
+  success("Frames 1-3: direct SENDER transfers SUCCESS (0x1)");
 
   // Verify payer is the EOA
   if (receipt.payer && receipt.payer.toLowerCase() !== devAddr.toLowerCase()) {

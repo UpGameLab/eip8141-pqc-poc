@@ -75,7 +75,7 @@ function createFalconEoaAccount(params: {
     publicKey,
     secretKey,
     sigType = FALCON_SIG_TYPE_SHAKE256,
-    scope = 2,
+    scope = 3,
     verifyGas = 250_000n,
     senderGas = 100_000n,
   } = params;

@@ -5,7 +5,7 @@
  * execution all happen in a single frame transaction (type 0x06).
  *
  *   Frame 0: DEFAULT(deployer) → Create2Deployer.deploy(salt, initCode)
- *   Frame 1: VERIFY(sender)    → account.validate(v, r, s, scope=2) → APPROVE
+ *   Frame 1: VERIFY(sender)    → account.validate(v, r, s, scope=3) → APPROVE
  *   Frame 2: SENDER(target)    → call to DEAD_ADDR
  *
  * Usage: cd contracts && npx tsx e2e/simple/simple-basic.ts

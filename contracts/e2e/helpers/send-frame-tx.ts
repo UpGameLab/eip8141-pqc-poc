@@ -74,7 +74,7 @@ export function createKernelAccount(
   privKey: Hex = DEV_KEY,
   opts: AccountOptions = {},
 ): FrameAccount {
-  const { scope = 2, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
+  const { scope = 3, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
   const owner = privateKeyToAccount(privKey);
   return toFrameAccount({
     address,
@@ -99,7 +99,7 @@ export function createKernelValidatorAccount(
   privKey: Hex,
   opts: AccountOptions = {},
 ): FrameAccount {
-  const { scope = 2, verifyGas = 300_000n, senderGas = 700_000n, deploy } = opts;
+  const { scope = 3, verifyGas = 300_000n, senderGas = 700_000n, deploy } = opts;
   const owner = privateKeyToAccount(privKey);
   return toFrameAccount({
     address,
@@ -126,7 +126,7 @@ export function createKernelPermissionAccount(
   privKey: Hex,
   opts: AccountOptions = {},
 ): FrameAccount {
-  const { scope = 2, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
+  const { scope = 3, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
   const owner = privateKeyToAccount(privKey);
   return toFrameAccount({
     address,
@@ -155,7 +155,7 @@ export function createCoinbaseAccount(
   privKey: Hex,
   opts: AccountOptions = {},
 ): FrameAccount {
-  const { scope = 2, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
+  const { scope = 3, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
   const owner = privateKeyToAccount(privKey);
   return toFrameAccount({
     address,
@@ -185,7 +185,7 @@ export function createLightAccount(
   privKey: Hex = DEV_KEY,
   opts: AccountOptions = {},
 ): FrameAccount {
-  const { scope = 2, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
+  const { scope = 3, verifyGas = 300_000n, senderGas = 500_000n, deploy } = opts;
   const owner = privateKeyToAccount(privKey);
   return toFrameAccount({
     address,

@@ -128,7 +128,7 @@ function createFalconSmartAccount(params: {
   const {
     address,
     secretKey,
-    scope = 2,
+    scope = 3,
     verifyGas = 500_000n,
     senderGas = 100_000n,
   } = params;
