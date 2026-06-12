@@ -4,7 +4,7 @@
        e2e e2e-simple e2e-kernel e2e-kernel-validator e2e-hooked \
        e2e-coinbase-ecdsa e2e-coinbase-webauthn e2e-light-account \
        e2e-negative-mempool e2e-negative-protocol e2e-negative \
-       e2e-mldsa e2e-falcon e2e-falcon-eoa e2e-falcon-roundtrip \
+       e2e-mldsa e2e-falcon e2e-falcon-eoa e2e-falcon-roundtrip e2e-falcon-negative \
        e2e-eoa e2e-eoa-batching e2e-eoa-sponsor e2e-eoa-p256 \
        benchmark
 
@@ -89,9 +89,13 @@ e2e-falcon-eoa:
 e2e-falcon:
 	$(MAKE) e2e-falcon-eoa
 	$(MAKE) e2e-falcon-roundtrip
+	$(MAKE) e2e-falcon-negative
 
 e2e-falcon-roundtrip:
 	cd contracts && npx tsx e2e/falcon/falcon-roundtrip.ts
+
+e2e-falcon-negative:
+	cd contracts && npx tsx e2e/falcon/falcon-negative.ts
 
 e2e-eoa-batching:
 	cd contracts && npx tsx e2e/eoa/eoa-batching.ts
