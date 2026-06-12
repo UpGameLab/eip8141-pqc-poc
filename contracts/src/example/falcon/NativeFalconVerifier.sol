@@ -10,6 +10,10 @@ contract NativeFalconVerifier {
     int256 internal constant Q = 12289;
     int256 internal constant BETA_SQUARED = 34_034_726;
 
+    int256 internal constant NTT_PSI = 10302;
+    int256 internal constant NTT_INV_N = 12265;
+    int256 internal constant NTT_INV_PSI = 8974;
+
     uint256 internal constant SIGNATURE_SIZE = 666;
     uint256 internal constant PUBLIC_KEY_SIZE = 896;
     uint256 internal constant CHALLENGE_SIZE = 896;
@@ -22,6 +26,23 @@ contract NativeFalconVerifier {
     /// @param pubkey Falcon-512 public key polynomial packed as 512 big-endian 14-bit coefficients.
     /// @param challenge Hash-to-point polynomial packed using the same 14-bit encoding.
     function verify(bytes calldata sig, bytes calldata pubkey, bytes calldata challenge) external pure returns (bool) {
+        return _verify(sig, pubkey, challenge, true);
+    }
+
+    /// @notice Research-only schoolbook verifier retained for gas comparison.
+    function verifySchoolbook(bytes calldata sig, bytes calldata pubkey, bytes calldata challenge)
+        external
+        pure
+        returns (bool)
+    {
+        return _verify(sig, pubkey, challenge, false);
+    }
+
+    function _verify(bytes calldata sig, bytes calldata pubkey, bytes calldata challenge, bool useNTT)
+        internal
+        pure
+        returns (bool)
+    {
         if (
             sig.length != SIGNATURE_SIZE || pubkey.length != PUBLIC_KEY_SIZE || challenge.length != CHALLENGE_SIZE
                 || uint8(sig[0]) != SIGNATURE_HEADER
@@ -38,7 +59,7 @@ contract NativeFalconVerifier {
         (int256[512] memory c, bool challengeOk) = _decodePolynomial(challenge);
         if (!challengeOk) return false;
 
-        int256[512] memory hs2 = _polyMul(h, s2);
+        int256[512] memory hs2 = useNTT ? _polyMulNTT(h, s2) : _polyMulSchoolbook(h, s2);
         int256[512] memory s1 = _polySub(c, hs2);
         return _normCheck(s1, s2);
     }
@@ -121,8 +142,146 @@ contract NativeFalconVerifier {
         return (s2, true);
     }
 
+    /// @dev Negacyclic NTT multiplication modulo (x^512 + 1, q).
+    function _polyMulNTT(int256[512] memory a, int256[512] memory b)
+        internal
+        pure
+        returns (int256[512] memory result)
+    {
+        int256[512] memory right;
+        int256 psiPower = 1;
+
+        unchecked {
+            for (uint256 i; i < N; ++i) {
+                a[i] = _normalize(a[i]) * psiPower % Q;
+                right[i] = _normalize(b[i]) * psiPower % Q;
+                psiPower = psiPower * NTT_PSI % Q;
+            }
+
+            _nttForward(a);
+            _nttForward(right);
+            for (uint256 i; i < N; ++i) {
+                a[i] = a[i] * right[i] % Q;
+            }
+            _nttInverse(a);
+
+            psiPower = 1;
+            for (uint256 i; i < N; ++i) {
+                result[i] = a[i] * psiPower % Q;
+                psiPower = psiPower * NTT_INV_PSI % Q;
+            }
+        }
+    }
+
+    function _nttForward(int256[512] memory values) internal pure {
+        _normalizeAndBitReverse(values);
+
+        unchecked {
+            for (uint256 length = 2; length <= N; length <<= 1) {
+                int256 rootStep = _forwardRootStep(length);
+                uint256 half = length >> 1;
+                for (uint256 offset; offset < N; offset += length) {
+                    int256 root = 1;
+                    for (uint256 j; j < half; ++j) {
+                        int256 even = values[offset + j];
+                        int256 odd = values[offset + j + half] * root % Q;
+                        int256 sum = even + odd;
+                        if (sum >= Q) sum -= Q;
+                        int256 difference = even - odd;
+                        if (difference < 0) difference += Q;
+                        values[offset + j] = sum;
+                        values[offset + j + half] = difference;
+                        root = root * rootStep % Q;
+                    }
+                }
+            }
+        }
+    }
+
+    function _nttInverse(int256[512] memory values) internal pure {
+        _normalizeAndBitReverse(values);
+
+        unchecked {
+            for (uint256 length = 2; length <= N; length <<= 1) {
+                int256 rootStep = _inverseRootStep(length);
+                uint256 half = length >> 1;
+                for (uint256 offset; offset < N; offset += length) {
+                    int256 root = 1;
+                    for (uint256 j; j < half; ++j) {
+                        int256 even = values[offset + j];
+                        int256 odd = values[offset + j + half] * root % Q;
+                        int256 sum = even + odd;
+                        if (sum >= Q) sum -= Q;
+                        int256 difference = even - odd;
+                        if (difference < 0) difference += Q;
+                        values[offset + j] = sum;
+                        values[offset + j + half] = difference;
+                        root = root * rootStep % Q;
+                    }
+                }
+            }
+            for (uint256 i; i < N; ++i) {
+                values[i] = values[i] * NTT_INV_N % Q;
+            }
+        }
+    }
+
+    function _normalizeAndBitReverse(int256[512] memory values) internal pure {
+        unchecked {
+            for (uint256 i; i < N; ++i) {
+                values[i] = _normalize(values[i]);
+            }
+            uint256 j;
+            for (uint256 i = 1; i < N; ++i) {
+                uint256 bit = N >> 1;
+                while ((j & bit) != 0) {
+                    j ^= bit;
+                    bit >>= 1;
+                }
+                j ^= bit;
+                if (i < j) {
+                    (values[i], values[j]) = (values[j], values[i]);
+                }
+            }
+        }
+    }
+
+    function _forwardRootStep(uint256 length) internal pure returns (int256) {
+        if (length == 2) return 12288;
+        if (length == 4) return 1479;
+        if (length == 8) return 8246;
+        if (length == 16) return 4134;
+        if (length == 32) return 5860;
+        if (length == 64) return 7311;
+        if (length == 128) return 12149;
+        if (length == 256) return 8340;
+        return 3400;
+    }
+
+    function _inverseRootStep(uint256 length) internal pure returns (int256) {
+        if (length == 2) return 12288;
+        if (length == 4) return 10810;
+        if (length == 8) return 7143;
+        if (length == 16) return 10984;
+        if (length == 32) return 8747;
+        if (length == 64) return 9650;
+        if (length == 128) return 790;
+        if (length == 256) return 1696;
+        return 2859;
+    }
+
+    function _normalize(int256 value) internal pure returns (int256) {
+        value %= Q;
+        if (value < 0) value += Q;
+        return value;
+    }
+
     /// @dev Schoolbook multiplication modulo (x^512 + 1, q).
-    function _polyMul(int256[512] memory a, int256[512] memory b) internal pure returns (int256[512] memory result) {
+    function _polyMulSchoolbook(int256[512] memory a, int256[512] memory b)
+        internal
+        pure
+        returns (int256[512] memory result)
+    {
         int256[512] memory acc;
 
         unchecked {

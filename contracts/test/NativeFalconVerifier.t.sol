@@ -6,6 +6,7 @@ import {NativeFalconVerifier} from "../src/example/falcon/NativeFalconVerifier.s
 
 contract NativeFalconVerifierTest is Test {
     event GasMeasured(uint256 gasUsed);
+    event GasMeasuredSchoolbook(uint256 gasUsed);
 
     NativeFalconVerifier internal verifier;
 
@@ -27,6 +28,19 @@ contract NativeFalconVerifierTest is Test {
         uint256 gasUsed = gasBefore - gasleft();
 
         emit GasMeasured(gasUsed);
+        assertTrue(valid);
+    }
+
+    function test_verifyNISTKATSchoolbookGas() public {
+        bytes memory signature = _signature();
+        bytes memory publicKey = _publicKey();
+        bytes memory challenge = _challenge();
+
+        uint256 gasBefore = gasleft();
+        bool valid = verifier.verifySchoolbook(signature, publicKey, challenge);
+        uint256 gasUsed = gasBefore - gasleft();
+
+        emit GasMeasuredSchoolbook(gasUsed);
         assertTrue(valid);
     }
 
